@@ -158,8 +158,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   $("save").addEventListener("click", save);
 
+  /* The cache is what a rescan can rebuild. NOTES ARE NOT — no request
+     re-derives a sentence the user typed — so this button must never take
+     them with it, however tempting one call would be. */
   $("clear").addEventListener("click", () => {
-    chrome.storage.local.set({ topicCache: {} }, () => flash("Topic cache cleared"));
+    chrome.storage.local.set({ topicCache: {}, repoFacts: {} }, () =>
+      flash("Cached repo facts cleared — your notes are untouched"));
   });
 
   // Ctrl/Cmd+S saves, because this doubles as a popup people close fast.

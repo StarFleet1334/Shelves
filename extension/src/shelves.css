@@ -120,3 +120,131 @@
 #shelves-host .sh-shelf ul > li:first-child {
   border-top: 0 !important;
 }
+
+/* ---- the filter (idea 2) ------------------------------------------------
+   `type="search"` brings the platform's own clear affordance; the width is a
+   ch measure rather than px so it holds the same number of characters at any
+   root font size the user has set. */
+.sh-find {
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 1px 8px;
+  width: 22ch;
+  border-radius: 6px;
+  border: 1px solid var(--borderColor-default, #30363d);
+  background: var(--bgColor-default, #0d1117);
+  color: var(--fgColor-default, #e6edf3);
+}
+.sh-find:focus {
+  outline: none;
+  border-color: var(--borderColor-accent-emphasis, #1f6feb);
+  box-shadow: 0 0 0 3px var(--focus-outlineColor, rgba(31, 111, 235, 0.3));
+}
+.sh-find::placeholder { color: var(--fgColor-muted, #8b949e); }
+
+.sh-found {
+  font-size: 12px;
+  color: var(--fgColor-muted, #8b949e);
+  min-width: 6ch;
+}
+
+/* A hidden row must lose its BOX, not just its ink: GitHub's rows are flex
+   items, so `visibility` would leave the gap and the shelf would look full of
+   holes. !important because the row's own utility classes set display. */
+#shelves-host li.sh-hide { display: none !important; }
+
+/* A shelf with no hits stays where it is and goes quiet. Removing it would
+   reshuffle the map while the reader is searching it. */
+.sh-shelf.sh-nomatch { opacity: 0.45; }
+.sh-shelf.sh-nomatch > .sh-sum { cursor: default; }
+
+/* ---- the private margin (idea 5) ----------------------------------------
+   IT LIVES IN THE TEXT COLUMN, NOT IN THE ROW. view.js appends it to the <li>'s
+   own content column, so here it is an ordinary block: full width of the text
+   it belongs under, aligned with the repo name, and no part of the row's flex
+   arithmetic.
+
+   The first version made it a third flex child with `flex: 0 0 100%`, on the
+   theory that a 100% basis would wrap it onto its own line. GitHub's row is
+   `d-flex` and DOES NOT WRAP, so instead it claimed the whole width and — with
+   flex-shrink 0 — refused to give any back: the description collapsed from
+   599px on two lines to 94px on thirteen, one word per line, breaking
+   mid-word. Measured in a real browser, which is the only place it was ever
+   going to be visible. */
+.sh-margin {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  width: 100%;
+  margin: 4px 0 2px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* THE FALLBACK MUST BE HARMLESS. When the row's markup is not one we
+   recognise, view.js appends to the <li> itself — so these two rules make that
+   case wrap instead of crush. `flex-shrink: 1` and `min-width: 0` are the
+   difference between a note on its own line and a row squeezed to nothing. */
+#shelves-host li { flex-wrap: wrap; }
+#shelves-host li > .sh-margin { flex: 1 1 100%; min-width: 0; }
+
+.sh-note-btn {
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px 0 0;
+  cursor: pointer;
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--fgColor-muted, #8b949e);
+}
+.sh-note-btn:hover { color: var(--fgColor-default, #e6edf3); }
+
+/* An empty note's button is invisible until the row is touched — 76 rows each
+   advertising a feature is noise; one row under the cursor is an offer. It
+   still occupies its line while invisible, because appearing on hover would
+   grow the row and shove every row below it down the page. */
+.sh-margin[data-has="0"] .sh-note-btn { opacity: 0; }
+#shelves-host li:hover .sh-margin[data-has="0"] .sh-note-btn,
+.sh-margin[data-has="0"] .sh-note-btn:focus { opacity: 1; }
+
+/* A WRITTEN NOTE DROPS THE PENCIL. The glyph is an invitation, and once the
+   note exists the note IS the invitation — it is already the click target. It
+   also cost the line its alignment: with the button in front, the note text
+   started ~40px right of the description it sits under, which is the one
+   thing every row on this page agrees about. Flush left, the accent rule is
+   the left-most mark and everything lines up. */
+.sh-margin[data-has="1"] .sh-note-btn { display: none; }
+
+.sh-note-text {
+  color: var(--fgColor-default, #e6edf3);
+  /* amber, not grey: this is the only text in the row that is the reader's
+     own, and it should not read as one more thing GitHub printed */
+  border-left: 2px solid var(--fgColor-attention, #d29922);
+  padding: 0 4px 0 8px;
+  border-radius: 0 3px 3px 0;
+  cursor: text;
+  white-space: pre-wrap;
+  line-height: 16px;
+}
+.sh-margin[data-has="1"] .sh-note-text:hover {
+  background: var(--bgColor-neutral-muted, #21262d);
+}
+.sh-margin[data-editing="1"] .sh-note-text,
+.sh-margin[data-editing="1"] .sh-note-btn { display: none; }
+
+.sh-note-edit {
+  font: inherit;
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  resize: vertical;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--borderColor-accent-emphasis, #1f6feb);
+  background: var(--bgColor-default, #0d1117);
+  color: var(--fgColor-default, #e6edf3);
+}

@@ -1,0 +1,151 @@
+<!doctype html>
+<html data-color-mode="dark">
+<head>
+<meta charset="utf-8">
+<title>SHELVES — row layout fixture</title>
+<!--
+  THE HARNESS CANNOT SEE. jsdom computes no layout, so the one bug that mattered
+  most in the note feature was invisible to all ten scenarios: `.sh-margin` was
+  a third flex child of GitHub's NON-WRAPPING row, with flex-shrink 0, and it
+  crushed the description from 599px on two lines to 94px on thirteen — one
+  word per line, breaking mid-word.
+
+  This is that row, rebuilt from the real markup with the utility classes that
+  decide its layout. Open it in a browser, or photograph it:
+
+      python ../../../secret/aether/aether/look.py tests/row-layout.html shot.png --width 960 --full
+
+  The numbers printed at the bottom are the assertion: every annotated row must
+  report the SAME col/desc/descLines as the control. If they differ, the margin
+  is back in the row's flex arithmetic.
+-->
+<style>
+  /* The parts of GitHub's utility CSS that decide this row's layout. Taken
+     from the real profile Repositories markup: the <li> is a NON-WRAPPING
+     flex row holding a wide left column and a narrow right one. */
+  :root {
+    --bgColor-default:#0d1117; --bgColor-muted:#161b22;
+    --bgColor-neutral-muted:#21262d; --fgColor-default:#e6edf3;
+    --fgColor-muted:#8b949e; --borderColor-default:#30363d;
+    --borderColor-emphasis:#6e7681; --borderColor-accent-emphasis:#1f6feb;
+  }
+  body { background:var(--bgColor-default); color:var(--fgColor-default);
+         font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+         margin:0; padding:16px; max-width:920px; }
+  ul { list-style:none; margin:0; padding:0; }
+  .col-12 { width:100%; }
+  .d-flex { display:flex; }
+  .flex-justify-between { justify-content:space-between; }
+  .py-4 { padding-top:16px; padding-bottom:16px; }
+  .border-bottom { border-bottom:1px solid var(--borderColor-default); }
+  .col-10 { width:83.33%; }
+  .col-2  { width:16.66%; }
+  .col-9  { width:75%; }
+  .d-inline-block { display:inline-block; }
+  .text-right { text-align:right; }
+  .mb-1 { margin-bottom:4px; } .mb-2 { margin-bottom:8px; }
+  .mt-2 { margin-top:8px; } .pr-4 { padding-right:24px; } .ml-1{margin-left:4px}
+  .f6 { font-size:12px; }
+  .color-fg-muted { color:var(--fgColor-muted); }
+  .wb-break-all { word-break:break-all; }
+  h3 { font-size:20px; font-weight:600; margin:0; }
+  h3 a { color:#4493f8; text-decoration:none; }
+  p { margin:0; }
+  .Label { border:1px solid var(--borderColor-default); border-radius:2em;
+           font-size:12px; padding:0 7px; color:var(--fgColor-muted); }
+  .btn { border:1px solid var(--borderColor-default); border-radius:6px;
+         background:var(--bgColor-muted); color:var(--fgColor-default);
+         padding:3px 12px; font:inherit; font-size:12px; }
+  .repo-language-color { display:inline-block; width:12px; height:12px;
+         border-radius:50%; background:#3572A5; vertical-align:text-bottom; }
+  h2.probe { font:600 12px/2 ui-monospace,monospace; color:#8b949e;
+             letter-spacing:.08em; margin:20px 0 0; }
+</style>
+<link rel="stylesheet" href="../extension/src/shelves.css">
+</head>
+<body>
+<div id="shelves-host">
+
+<h2 class="probe">CONTROL — GitHub's row, untouched</h2>
+<ul>
+  <li class="col-12 d-flex flex-justify-between py-4 border-bottom">
+    <div class="col-10 d-inline-block">
+      <div class="d-inline-block mb-1"><h3 class="wb-break-all"><a href="/o/Commit-Memory">Commit-Memory</a></h3></div>
+      <div class="d-inline-block mb-1"><span class="Label ml-1">Private</span></div>
+      <div><p class="col-9 d-inline-block color-fg-muted mb-2 pr-4">A Git companion tool that allows you to attach notes and memos to specific commits and file lines in your Git repository.</p></div>
+      <div class="f6 color-fg-muted mt-2"><span class="repo-language-color"></span> Python · Updated 2 days ago</div>
+    </div>
+    <div class="col-2 d-inline-block text-right"><button class="btn">☆ Star</button></div>
+  </li>
+</ul>
+
+<h2 class="probe">A WRITTEN NOTE — flush with the description it sits under</h2>
+<ul>
+  <li class="col-12 d-flex flex-justify-between py-4 border-bottom" data-sh-margin="1">
+    <div class="col-10 d-inline-block">
+      <div class="d-inline-block mb-1"><h3 class="wb-break-all"><a href="/o/Commit-Memory">Commit-Memory</a></h3></div>
+      <div class="d-inline-block mb-1"><span class="Label ml-1">Private</span></div>
+      <div><p class="col-9 d-inline-block color-fg-muted mb-2 pr-4">A Git companion tool that allows you to attach notes and memos to specific commits and file lines in your Git repository.</p></div>
+      <div class="sh-margin" data-has="1">
+        <button class="sh-note-btn">✎</button>
+        <span class="sh-note-text">the one with the broken deploy</span>
+      </div>
+      <div class="f6 color-fg-muted mt-2"><span class="repo-language-color"></span> Python · Updated 2 days ago</div>
+    </div>
+    <div class="col-2 d-inline-block text-right"><button class="btn">☆ Star</button></div>
+  </li>
+</ul>
+
+<h2 class="probe">AN EMPTY NOTE — quiet, but its line is reserved (no hover jitter)</h2>
+<ul>
+  <li class="col-12 d-flex flex-justify-between py-4 border-bottom" data-sh-margin="1">
+    <div class="col-10 d-inline-block">
+      <div class="d-inline-block mb-1"><h3 class="wb-break-all"><a href="/o/throttle-kit">throttle-kit</a></h3></div>
+      <div><p class="col-9 d-inline-block color-fg-muted mb-2 pr-4">Token bucket rate limiting for flaky upstreams.</p></div>
+      <div class="sh-margin" data-has="0">
+        <button class="sh-note-btn">✎ note</button>
+        <span class="sh-note-text"></span>
+      </div>
+      <div class="f6 color-fg-muted mt-2"><span class="repo-language-color"></span> Python · Updated 6 days ago</div>
+    </div>
+    <div class="col-2 d-inline-block text-right"><button class="btn">☆ Star</button></div>
+  </li>
+</ul>
+
+<h2 class="probe">BEING EDITED — the field takes the column, not the row</h2>
+<ul>
+  <li class="col-12 d-flex flex-justify-between py-4 border-bottom" data-sh-margin="1">
+    <div class="col-10 d-inline-block">
+      <div class="d-inline-block mb-1"><h3 class="wb-break-all"><a href="/o/wisp">wisp</a></h3></div>
+      <div><p class="col-9 d-inline-block color-fg-muted mb-2 pr-4">Dotfiles, but opinionated.</p></div>
+      <div class="sh-margin" data-has="1" data-editing="1">
+        <button class="sh-note-btn">✎</button>
+        <span class="sh-note-text">client wants this back in March</span>
+        <textarea class="sh-note-edit" rows="1">client wants this back in March</textarea>
+      </div>
+      <div class="f6 color-fg-muted mt-2"><span class="repo-language-color"></span> Shell · Updated 3 weeks ago</div>
+    </div>
+    <div class="col-2 d-inline-block text-right"><button class="btn">☆ Star</button></div>
+  </li>
+</ul>
+
+</div>
+<script>
+  /* Measure, do not eyeball: the description's own box is the thing that broke. */
+  const out = [];
+  document.querySelectorAll("li").forEach((li, i) => {
+    const p = li.querySelector("p");
+    const col = li.querySelector(".col-10");
+    out.push((i ? "with-margin" : "control  ") +
+      "  li=" + Math.round(li.getBoundingClientRect().width) +
+      "  col=" + Math.round(col.getBoundingClientRect().width) +
+      "  desc=" + Math.round(p.getBoundingClientRect().width) +
+      "  descLines=" + Math.round(p.getBoundingClientRect().height / 21));
+  });
+  const pre = document.createElement("pre");
+  pre.style.cssText = "color:#7ee787;font:12px ui-monospace,monospace;margin-top:24px";
+  pre.textContent = out.join("\n");
+  document.body.appendChild(pre);
+</script>
+</body>
+</html>

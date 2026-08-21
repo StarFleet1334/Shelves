@@ -47,10 +47,24 @@ async function fetchRepos({ user, token }) {
     if (!Array.isArray(rows) || rows.length === 0) break;
 
     for (const r of rows) {
+      /* THE BODY ALREADY CARRIES ALL OF THIS. Keeping three fields and
+       * dropping the rest left a repo answered by the API knowing less about
+       * itself than one scraped off its own page — for no saved bytes, since
+       * the response was the same size either way. Nothing added here is a
+       * second request. */
       out.push({
         full_name: String(r.full_name || "").toLowerCase(),
         topics: Array.isArray(r.topics) ? r.topics.map(String) : [],
         private: !!r.private,
+        description: r.description ? String(r.description) : "",
+        language: r.language ? String(r.language) : "",
+        stars: typeof r.stargazers_count === "number" ? r.stargazers_count : null,
+        forks: typeof r.forks_count === "number" ? r.forks_count : null,
+        license: r.license && r.license.spdx_id ? String(r.license.spdx_id) : "",
+        homepage: r.homepage ? String(r.homepage) : "",
+        updated: r.pushed_at ? Date.parse(r.pushed_at) || null : null,
+        archived: !!r.archived,
+        fork: !!r.fork,
       });
     }
     if (rows.length < PER_PAGE) break; // short page means last page

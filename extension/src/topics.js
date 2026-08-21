@@ -56,7 +56,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     const todo = [];
     for (const name of names) {
       const hit = cache[name];
-      if (hit && hit.at > freshAfter && Array.isArray(hit.topics)) found.set(name, hit.topics);
+      if (hit && hit.at > freshAfter && Array.isArray(hit.topics)) found.set(name, hit);
       else todo.push(name);
     }
 
@@ -68,12 +68,14 @@ globalThis.Shelves = globalThis.Shelves || {};
         const res = await fetch("/" + name, { credentials: "same-origin" });
         if (res.ok) {
           const doc = new DOMParser().parseFromString(await res.text(), "text/html");
-          // Scope to the sidebar so a README full of /topics/ links cannot lie.
-          const scope =
-            doc.querySelector('.Layout-sidebar, [data-testid="repository-sidebar"]') || doc;
-          const topics = S.topicsIn(scope);
-          found.set(name, topics);
-          cache[name] = { at: Date.now(), topics };
+          /* ONE PARSE, TEN FACTS (facts.js). Topics are still scoped to the
+           * sidebar in there, so a README full of /topics/ links cannot lie;
+           * everything else this page was already telling us is now kept
+           * instead of dropped, for exactly the same one request. */
+          const facts = S.factsFrom(doc, name);
+          facts.at = Date.now();
+          found.set(name, facts);
+          cache[name] = facts;
         }
       } catch (e) {
         /* one unreachable repo must not sink the page (P.III) */
@@ -88,16 +90,18 @@ globalThis.Shelves = globalThis.Shelves || {};
   }
 
   /**
-   * @returns {{topics: string[][], source: string, warning: string}}
-   *          topics is parallel to `rows`.
+   * @returns {{topics: string[][], facts: object[], source: string, warning: string}}
+   *          both arrays are parallel to `rows`; a facts entry is never null,
+   *          only empty, so no caller needs a guard for the difference.
    */
   S.resolve = async function resolve(rows, names, settings, onProgress) {
     let topics = rows.map((li) => S.topicsIn(li));
+    let facts = names.map((n, i) => ({ name: n, topics: topics[i] }));
     const answered = () => topics.filter((t) => t.length).length;
 
     // Rung 1 — the page itself.
     if (answered() > 0) {
-      return { topics, source: "page", warning: "" };
+      return { topics, facts, source: "page", warning: "" };
     }
 
     // Rungs 2 and 3 — the API, via the worker. One call answers everyone.
@@ -110,8 +114,9 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
 
     const byName = new Map();
-    (reply.repos || []).forEach((r) => byName.set(r.full_name, r.topics || []));
-    topics = names.map((n) => byName.get(n) || []);
+    (reply.repos || []).forEach((r) => byName.set(r.full_name, S.factsFromApi(r)));
+    facts = names.map((n, i) => byName.get(n) || { name: n, topics: [] });
+    topics = facts.map((f) => f.topics || []);
 
     if (settings.token) {
       source = "api (token)";
@@ -134,7 +139,8 @@ globalThis.Shelves = globalThis.Shelves || {};
     if (missing.length) {
       const { found, fetched } = await scrape(missing, settings, onProgress);
       if (found.size) {
-        topics = names.map((n, i) => (topics[i].length ? topics[i] : found.get(n) || []));
+        facts = names.map((n, i) => (topics[i].length ? facts[i] : found.get(n) || facts[i]));
+        topics = facts.map((f) => (f && f.topics) || []);
         // Name the cache explicitly: "repo pages" when nothing was fetched
         // would leave the user unable to tell a warm run from a cold one (P.IV).
         const rung = fetched ? "repo pages" : "repo pages (cached)";
@@ -142,6 +148,6 @@ globalThis.Shelves = globalThis.Shelves || {};
       }
     }
 
-    return { topics, source, warning };
+    return { topics, facts, source, warning };
   };
 })(globalThis.Shelves);

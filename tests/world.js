@@ -16,7 +16,8 @@ const vm = require("vm");
 const { JSDOM } = require("jsdom");
 
 const EXT = path.join(__dirname, "..", "extension");
-const CONTENT = ["src/store.js", "src/dom.js", "src/topics.js", "src/view.js", "src/main.js"];
+const CONTENT = ["src/store.js", "src/dom.js", "src/facts.js", "src/topics.js",
+                 "src/view.js", "src/main.js"];
 
 /* ---- fixtures ---------------------------------------------------------- */
 
@@ -24,12 +25,22 @@ function chip(topic) {
   return `<a class="topic-tag topic-tag-link" href="/topics/${topic}">${topic}</a>`;
 }
 
+/* SHAPED LIKE THE REAL ROW, not merely like enough. GitHub's <li> is a flex
+ * row holding a wide text column and a narrow Star column, and the heading is
+ * nested two levels inside the first. A flatter fake let a real bug through:
+ * the note margin is meant to land IN the text column, and with no column to
+ * find, the harness could not tell right placement from wrong. */
 function row(owner, name, topics) {
   const chips = (topics || []).map(chip).join("");
   return (
-    `<li class="col-12 d-flex">` +
+    `<li class="col-12 d-flex flex-justify-between">` +
+    `<div class="col-10 d-inline-block">` +
+    `<div class="d-inline-block mb-1">` +
     `<h3><a itemprop="name codeRepository" href="/${owner}/${name}">${name}</a></h3>` +
+    `</div>` +
     (chips ? `<div class="topics">${chips}</div>` : "") +
+    `</div>` +
+    `<div class="col-2 d-inline-block text-right"><button class="btn">Star</button></div>` +
     `</li>`
   );
 }
@@ -47,12 +58,37 @@ function profilePage(owner, repos, next) {
   </body></html>`;
 }
 
-/** A repo's own page: topics live in the sidebar. */
-function repoPage(topics) {
-  return `<!doctype html><html><body>
+/** A repo's own page. Topics live in the sidebar (charter §7) — and so does
+ *  everything else facts.js harvests, which is the point of idea 1. Shaped
+ *  after the real page's STABLE parts: the <meta> description GitHub gives
+ *  search engines, the counters' title attributes, the language link's
+ *  `?l=` shape, <relative-time datetime>. Deliberately dumb, per this file's
+ *  own rule about suspecting the harness first.
+ *
+ *  Accepts a repo object; an array is still read as bare topics so an older
+ *  caller keeps working. */
+function repoPage(repo, owner, name) {
+  const r = Array.isArray(repo) ? { topics: repo } : (repo || {});
+  const topics = r.topics || [];
+  const full = (owner || "octo") + "/" + (name || r.name || "repo");
+  const desc = r.description || "";
+  const metaDesc = desc
+    ? `${desc}. Contribute to ${full} development by creating an account on GitHub.`
+    : "";
+  return `<!doctype html><html><head>
+    ${metaDesc ? `<meta name="description" content="${metaDesc}">` : ""}
+  </head><body>
     <div class="Layout-sidebar">
-      <h2>About</h2>${(topics || []).map(chip).join("")}
+      <h2>About</h2>
+      ${topics.map(chip).join("")}
+      ${r.homepage ? `<a href="${r.homepage}">${r.homepage}</a>` : ""}
+      ${r.license ? `<a href="/${full}/blob/HEAD/LICENSE">${r.license} license</a>` : ""}
+      ${r.language ? `<a href="/${full}/search?l=${encodeURIComponent(r.language)}">${r.language}</a>` : ""}
     </div>
+    ${r.stars != null ? `<a id="repo-stars-counter-star" href="/${full}/stargazers" title="${r.stars}">${r.stars}</a>` : ""}
+    ${r.forks != null ? `<a id="repo-network-counter" href="/${full}/forks" title="${r.forks}">${r.forks}</a>` : ""}
+    ${r.updated ? `<relative-time datetime="${r.updated}">then</relative-time>` : ""}
+    ${r.readme ? `<article class="markdown-body"><p>${r.readme}</p></article>` : ""}
     <div class="readme"><a href="/topics/decoy">decoy link outside the sidebar</a></div>
   </body></html>`;
 }
@@ -141,7 +177,9 @@ function build(opts) {
   const owner = opts.owner || "octo";
   const store = {
     sync: { ...(opts.settings || {}) },
-    local: { token: opts.token || "", topicCache: opts.cache || {} },
+    local: { token: opts.token || "", repoFacts: opts.cache || {},
+             topicCache: opts.legacyCache || {},
+             notes: opts.notes || {} },
   };
   const counters = { api: 0, lastAuth: false, pages: [], scraped: [] };
 
@@ -172,6 +210,15 @@ function build(opts) {
           full_name: `${owner}/${r.name}`,
           topics: r.topics || [],
           private: !!r.private,
+          description: r.description || null,
+          language: r.language || null,
+          stargazers_count: r.stars == null ? undefined : r.stars,
+          forks_count: r.forks == null ? undefined : r.forks,
+          license: r.license ? { spdx_id: r.license } : null,
+          homepage: r.homepage || null,
+          pushed_at: r.updated || null,
+          archived: !!r.archived,
+          fork: !!r.fork,
         })),
     };
   };
@@ -191,7 +238,7 @@ function build(opts) {
     const hit = all.find((r) => `${owner}/${r.name}`.toLowerCase() === name);
     if (hit) {
       counters.scraped.push(name);
-      return { ok: true, status: 200, text: async () => repoPage(hit.topics || []) };
+      return { ok: true, status: 200, text: async () => repoPage(hit, owner, hit.name) };
     }
     return { ok: false, status: 404, text: async () => "" };
   };
@@ -220,9 +267,53 @@ function readShelves(win) {
     })),
     hostCount: win.document.querySelectorAll("#shelves-host").length,
     nested: !!host.querySelector("#shelves-host, .sh-shelf .sh-shelf"),
+    find: host.querySelector(".sh-find"),
+    found: (host.querySelector(".sh-found") || {}).textContent || "",
+    // what a reader would actually SEE, after the filter has hidden rows
+    visible: [...host.querySelectorAll("details li")]
+      .filter((li) => !li.classList.contains("sh-hide"))
+      .map((li) => (li.querySelector("h3 a") || {}).textContent),
+    notes: Object.fromEntries(
+      [...host.querySelectorAll("details li")].map((li) => [
+        (li.querySelector("h3 a") || {}).textContent,
+        (li.querySelector(".sh-note-text") || {}).textContent || "",
+      ])
+    ),
+    hay: Object.fromEntries(
+      [...host.querySelectorAll("details li")].map((li) => [
+        (li.querySelector("h3 a") || {}).textContent,
+        li.dataset.shHay || "",
+      ])
+    ),
   };
+}
+
+/** Type into the toolbar's filter the way a person does. */
+function type(win, text) {
+  const el = win.document.querySelector("#shelves-host .sh-find");
+  if (!el) throw new Error("no filter box rendered");
+  el.value = text;
+  el.dispatchEvent(new win.Event("input", { bubbles: true }));
+  return el;
+}
+
+/** Open one row's note editor, type, and press Enter — no shortcuts through
+ *  the module's own internals, so the listeners are what is under test. */
+function writeNote(win, repoName, text) {
+  const li = [...win.document.querySelectorAll("#shelves-host details li")].find(
+    (x) => ((x.querySelector("h3 a") || {}).textContent || "") === repoName
+  );
+  if (!li) throw new Error("no row for " + repoName);
+  const btn = li.querySelector(".sh-note-btn");
+  if (!btn) throw new Error("no note affordance on " + repoName);
+  btn.click();
+  const ta = li.querySelector("textarea.sh-note-edit");
+  if (!ta) throw new Error("the editor did not open on " + repoName);
+  ta.value = text;
+  ta.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  return li;
 }
 
 const settle = (ms) => new Promise((r) => setTimeout(r, ms || 700));
 
-module.exports = { build, readShelves, settle, profilePage, repoPage };
+module.exports = { build, readShelves, settle, type, writeNote, profilePage, repoPage };

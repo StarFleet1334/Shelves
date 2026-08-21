@@ -33,8 +33,17 @@ say so at the point of conflict.
 
 SHELVES writes nothing to GitHub. Not a topic, not a star, not a description —
 there is no code path that issues a mutating request, and the permissions it asks
-for cannot express one. Everything it keeps locally (a topic cache, a handful of
-settings) is derived, disposable, and reconstructible by pressing *rescan*.
+for cannot express one. Almost everything it keeps locally (the fact cache, a
+handful of settings) is derived, disposable, and reconstructible by pressing
+*rescan*.
+
+**There is exactly one exception, and it is written down here so that it cannot
+be forgotten by someone tidying up a clear-cache handler: notes.** A sentence
+the user typed about a repository is derived from nothing and no request
+re-creates it. It therefore lives under a different rule from the cache —
+*rescan* and *clear cache* must never take it with them, and the code says so
+at both call sites. Widening this exception is a charter amendment, not a
+feature.
 
 The practical test: **uninstalling must be a complete undo.** No orphaned state
 on any server, nothing changed about the account.
@@ -135,6 +144,27 @@ constrains, with the reason** — because they are all locally-surprising, and a
 future reader with good instincts will otherwise simplify them straight back into
 the bug they came from.
 
+### XI. Pay for a page once, and keep what it said
+
+A repo's own page is the expensive thing SHELVES does — one request each,
+seventy-six of them on a cold run. That document carries the description, the
+language, the stars, the licence, the homepage, the README's opening line and
+when it was last touched. Reading four topic chips out of it and discarding the
+rest is not thrift; it is paying full price for a tenth of the goods, and it is
+why the extension could not answer *"which repo was the one about rate
+limiting?"* despite having read the answer aloud seventy-six times.
+
+So: **one parse, every fact, one file.** Every selector for the repo page lives
+in `facts.js` and nowhere else, each extractor with its own fallback chain, each
+free to return nothing. A field that cannot be read costs that field — never the
+row, never the render.
+
+The other half of the principle is the harder one. Only `topics` and
+`description` are *measured*; the rest are best-effort until someone drives them
+against a real logged-in repo page. They therefore prefer `<meta>` tags and href
+**shapes** over class names, because class names are the half that churns — and
+a wrong selector here must always be an absent field, never a wrong one.
+
 ---
 
 ## What was measured
@@ -177,10 +207,14 @@ not defects in what was under test.
                                       │
    ── content scripts, isolated world, one namespace `Shelves` ──────────────
                                       │
-   store.js ── settings (sync) · token (local) · topic cache · collapse state
+   store.js ── settings (sync) · token (local) · fact cache · notes ·
+      │        collapse state       (notes are NOT cache — see principle I)
       │
    dom.js ──── isRepoTab · findList · harvest <li> · merge pages 2..N
       │                                   (same-origin, cookies free)
+      │
+   facts.js ── ONE PARSE of a repo page: topics · description · language ·
+      │        stars · forks · licence · homepage · README · updated
       │
    topics.js ─ THE LADDER: page chips → API → repo pages
       │              │                    │
@@ -188,7 +222,8 @@ not defects in what was under test.
       │              │
       │              └── chrome.runtime.sendMessage ──┐
       │                                               │
-   view.js ─── bucket · order · build <details> · toolbar · themed off
+   view.js ─── bucket · order · build <details> · toolbar · the filter ·
+      │        one row's private margin · themed off  │
       │        GitHub's own CSS variables             │
       │                                               │
    main.js ── lifecycle: load, turbo:*, MutationObserver, storage changes
@@ -209,7 +244,7 @@ not defects in what was under test.
                     └──────────────────────────────────────────┘
 ```
 
-Five content scripts rather than one file, sharing `globalThis.Shelves`. They
+Six content scripts rather than one file, sharing `globalThis.Shelves`. They
 load in declared order and each does one job, which is what lets the harness
 drive `topics.js` against a stub without a browser anywhere in sight.
 

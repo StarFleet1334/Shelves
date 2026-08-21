@@ -24,7 +24,9 @@ globalThis.Shelves = globalThis.Shelves || {};
     maxPages: 10,
   };
 
-  const CACHE_KEY = "topicCache";
+  const CACHE_KEY = "topicCache";   // what the fact cache used to be called
+  const FACTS_KEY = "repoFacts";
+  const NOTES_KEY = "notes";
 
   const api = () =>
     (typeof chrome !== "undefined" && chrome && chrome.storage) ? chrome.storage : null;
@@ -81,19 +83,62 @@ globalThis.Shelves = globalThis.Shelves || {};
   S.saveSettings = (patch) => set("sync", patch);
   S.saveToken = (token) => set("local", { token: String(token || "").trim() });
 
-  /* ---- topic cache: { "owner/name": { at: ms, topics: [] } } ------------ */
+  /* ---- the fact cache -------------------------------------------------- */
+  /* { "owner/name": { at: ms, topics: [], description, language, stars, … } }
+   *
+   * This was `topicCache` and held one field. It is the same store with the
+   * rest of what the repo page was already telling us kept instead of thrown
+   * away, so the key changed with it — a cache whose name lies about what is
+   * in it is how the next reader ends up re-fetching for facts it already has.
+   *
+   * A cache written by the old version is still VALID here: `{at, topics}` is
+   * a fact record with nine absent fields, which is a shape every reader
+   * already handles. So it is adopted rather than discarded, and nobody pays
+   * seventy-six requests for an upgrade. */
 
   S.cache = {
     async read() {
-      const got = await get("local", { [CACHE_KEY]: {} });
-      const c = got[CACHE_KEY];
-      return c && typeof c === "object" ? c : {};
+      const got = await get("local", { [FACTS_KEY]: {}, [CACHE_KEY]: {} });
+      const c = got[FACTS_KEY];
+      if (c && typeof c === "object" && Object.keys(c).length) return c;
+      const old = got[CACHE_KEY];
+      return old && typeof old === "object" ? old : {};
     },
     write(cache) {
-      return set("local", { [CACHE_KEY]: cache });
+      return set("local", { [FACTS_KEY]: cache });
     },
+    /* Rescan forgets what it can rebuild and NOTHING ELSE. The notes below are
+     * the user's own words: no request re-derives them, so nothing here is
+     * allowed to touch them (P.I's "reconstructible" is a claim about this
+     * store, and notes are the one part of it that is not). */
     clear() {
-      return set("local", { [CACHE_KEY]: {} });
+      return set("local", { [FACTS_KEY]: {}, [CACHE_KEY]: {} });
+    },
+  };
+
+  /* ---- notes: { "owner/name": "the user's own words" } ------------------ */
+  /* A private margin on your own repositories, which GitHub offers nowhere.
+   * chrome.storage.LOCAL, like the token and for a different reason: sync
+   * caps an item at 8KB and a hundred notes would silently stop saving. */
+
+  S.notes = {
+    async read() {
+      const got = await get("local", { [NOTES_KEY]: {} });
+      const n = got[NOTES_KEY];
+      return n && typeof n === "object" ? n : {};
+    },
+    write(notes) {
+      return set("local", { [NOTES_KEY]: notes });
+    },
+    /** Empty text REMOVES the key — an empty note is not a note, and keeping
+     *  it would make the note marker lie about which rows carry one. */
+    async set(name, textIn) {
+      const notes = await this.read();
+      const t = String(textIn == null ? "" : textIn).trim().slice(0, 2000);
+      if (t) notes[String(name || "").toLowerCase()] = t;
+      else delete notes[String(name || "").toLowerCase()];
+      const ok = await this.write(notes);
+      return { ok, notes };
     },
   };
 
