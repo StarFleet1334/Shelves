@@ -3,3 +3,4 @@ tests/node_modules/
 tests/package-lock.json
 *.zip
 .DS_Store
+.greenhouse/tendings/
