@@ -1,0 +1,12 @@
+{
+  "name": "shelves-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "jsdom harness for the SHELVES extension. Never shipped — the extension itself has no dependencies (charter, principle IX).",
+  "scripts": {
+    "test": "node harness.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}

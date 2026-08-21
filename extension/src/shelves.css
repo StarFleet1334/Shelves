@@ -1,0 +1,122 @@
+/* SHELVES — shelves.css
+ *
+ * Themed entirely off GitHub's own custom properties, with literal fallbacks
+ * for the case where a rename lands before we notice. This is why light, dark
+ * and dimmed all work with no theme detection and no media query: we are
+ * borrowing the page's palette rather than guessing at it.
+ */
+
+#shelves-host {
+  margin: 0;
+}
+
+.sh-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+.sh-btn {
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 1px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--borderColor-default, #30363d);
+  background: var(--bgColor-muted, #161b22);
+  color: var(--fgColor-default, #e6edf3);
+}
+.sh-btn:hover {
+  background: var(--bgColor-neutral-muted, #21262d);
+  border-color: var(--borderColor-emphasis, #6e7681);
+}
+.sh-btn:active {
+  transform: translateY(1px);
+}
+
+.sh-note {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--fgColor-muted, #8b949e);
+}
+.sh-warn {
+  color: var(--fgColor-attention, #d29922);
+}
+
+.sh-status {
+  font-size: 12px;
+  color: var(--fgColor-muted, #8b949e);
+  padding: 8px 0;
+}
+
+.sh-shelf {
+  border: 1px solid var(--borderColor-default, #30363d);
+  border-radius: 6px;
+  margin: 0 0 12px;
+  overflow: hidden;
+}
+
+.sh-sum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  background: var(--bgColor-muted, #161b22);
+  user-select: none;
+}
+.sh-sum::-webkit-details-marker {
+  display: none;
+}
+/* The disclosure triangle is drawn rather than borrowed: GitHub's octicons are
+   not addressable from here, and a rotating glyph needs no asset. */
+.sh-sum::before {
+  content: "\25B8";
+  display: inline-block;
+  opacity: 0.6;
+  transition: transform 0.12s ease;
+}
+.sh-shelf[open] > .sh-sum::before {
+  transform: rotate(90deg);
+}
+.sh-shelf[open] > .sh-sum {
+  border-bottom: 1px solid var(--borderColor-default, #30363d);
+}
+.sh-sum:hover {
+  background: var(--bgColor-neutral-muted, #21262d);
+}
+
+.sh-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sh-count {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--fgColor-muted, #8b949e);
+  background: var(--bgColor-neutral-muted, #21262d);
+  border-radius: 2em;
+  padding: 0 8px;
+  min-width: 2em;
+  text-align: center;
+}
+
+/* GitHub's own list styling carries the row borders; ours must not add a
+   second frame inside the shelf. */
+#shelves-host .sh-shelf ul {
+  margin: 0 !important;
+  padding: 0 12px !important;
+  border: 0 !important;
+  list-style: none;
+}
+#shelves-host .sh-shelf ul > li:first-child {
+  border-top: 0 !important;
+}

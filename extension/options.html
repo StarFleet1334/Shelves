@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Shelves — options</title>
+    <style>
+      /* Sized to work both as a 400px action popup and as a full options page. */
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --line: #d1d9e0;
+        --field: #f6f8fa;
+        --accent: #0969da;
+        --warn: #9a6700;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d1117;
+          --fg: #e6edf3;
+          --muted: #8b949e;
+          --line: #30363d;
+          --field: #161b22;
+          --accent: #4493f8;
+          --warn: #d29922;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 16px;
+        width: 400px;
+        max-width: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.5 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+      }
+      @media (min-width: 700px) {
+        body { width: 640px; margin: 0 auto; padding: 32px 24px; }
+      }
+      h1 { font-size: 16px; margin: 0 0 2px; }
+      .sub { color: var(--muted); margin: 0 0 20px; }
+      h2 {
+        font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+        color: var(--muted); margin: 24px 0 8px; font-weight: 600;
+      }
+      p.hint { color: var(--muted); margin: 6px 0 0; font-size: 12px; }
+      a { color: var(--accent); }
+
+      .row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+      input[type="text"], input[type="password"], input[type="number"] {
+        flex: 1; min-width: 0;
+        font: inherit; padding: 5px 8px;
+        border: 1px solid var(--line); border-radius: 6px;
+        background: var(--field); color: var(--fg);
+      }
+      input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      button {
+        font: inherit; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+        border: 1px solid var(--line); background: var(--field); color: var(--fg);
+      }
+      button:hover { border-color: var(--muted); }
+      button.icon { padding: 5px 8px; line-height: 1; }
+      button.primary {
+        background: var(--accent); border-color: transparent; color: #fff; font-weight: 600;
+      }
+      .grid { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+      label.inline { display: flex; align-items: center; gap: 8px; }
+      .foot {
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
+      }
+      #saved { color: var(--muted); font-size: 12px; }
+      details.tok summary { cursor: pointer; color: var(--accent); font-size: 12px; }
+      .box {
+        border: 1px solid var(--line); border-radius: 6px;
+        padding: 10px 12px; margin-top: 8px; background: var(--field);
+      }
+      .box ol { margin: 6px 0 0; padding-left: 18px; }
+      .box code { font-size: 11px; }
+      .warnrow { color: var(--warn); }
+    </style>
+  </head>
+  <body>
+    <h1>Shelves</h1>
+    <p class="sub">Group your GitHub repositories by topic.</p>
+
+    <h2>Your shelves</h2>
+    <div id="groups"></div>
+    <div class="row">
+      <input type="text" id="newGroup" placeholder="topic name, e.g. aiproject" />
+      <button id="add">Add</button>
+    </div>
+    <p class="hint">
+      One topic per shelf, in the order they should appear. A repo goes on the
+      <strong>first</strong> shelf whose topic it carries. Leave this empty to
+      group automatically by whatever topics you already use.
+    </p>
+
+    <h2>Private repositories</h2>
+    <p class="hint" style="margin-top:0">
+      By default, topics for private repos are read from your own repo pages
+      using the session you are already signed in with — slower on first load,
+      then cached. A token replaces that with a single API call.
+    </p>
+    <div class="row" style="margin-top:8px">
+      <input type="password" id="token" placeholder="optional — fine-grained token" autocomplete="off" spellcheck="false" />
+      <button class="icon" id="reveal" title="Show / hide">👁</button>
+    </div>
+    <details class="tok">
+      <summary>How to make a safe token</summary>
+      <div class="box">
+        <ol>
+          <li>Open <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">github.com/settings/tokens?type=beta</a> → <em>Generate new token</em></li>
+          <li>Repository access: <strong>All repositories</strong></li>
+          <li>Permissions → Repository permissions → <strong>Metadata: Read-only</strong></li>
+          <li>Leave every other permission at <em>No access</em></li>
+        </ol>
+        <p class="hint">
+          Metadata-read-only is the weakest token GitHub can issue: it cannot
+          read a line of your code and cannot write anything at all. It is kept
+          in this browser's local extension storage — never in synced storage,
+          never sent anywhere but <code>api.github.com</code>.
+        </p>
+      </div>
+    </details>
+
+    <h2>Behaviour</h2>
+    <div class="grid">
+      <label class="inline" for="startCollapsed">Start with shelves collapsed</label>
+      <input type="checkbox" id="startCollapsed" />
+
+      <label class="inline" for="cacheDays">Remember topics for (days)</label>
+      <input type="number" id="cacheDays" min="1" max="90" style="width:80px;flex:none" />
+
+      <label class="inline" for="otherLabel">Name for the leftovers shelf</label>
+      <input type="text" id="otherLabel" style="width:140px;flex:none" />
+    </div>
+
+    <div class="foot">
+      <button class="primary" id="save">Save</button>
+      <button id="clear">Clear topic cache</button>
+      <span id="saved"></span>
+    </div>
+
+    <p class="hint" style="margin-top:16px">
+      Shelves never writes to your GitHub account. It reads topics and rearranges
+      the page in your browser — uninstalling it leaves GitHub exactly as it was.
+    </p>
+
+    <script src="options.js"></script>
+  </body>
+</html>

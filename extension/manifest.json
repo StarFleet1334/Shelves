@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Shelves — group GitHub repos by topic",
+  "version": "1.0.0",
+  "description": "Groups your GitHub Repositories tab into collapsible shelves by topic. Read-only: it never writes to your GitHub account.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://github.com/*", "https://api.github.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": [
+        "src/store.js",
+        "src/dom.js",
+        "src/topics.js",
+        "src/view.js",
+        "src/main.js"
+      ],
+      "css": ["src/shelves.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Shelves",
+    "default_popup": "options.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}
