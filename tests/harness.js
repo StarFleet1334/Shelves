@@ -223,6 +223,17 @@ const SCENARIOS = [
 
 (async () => {
   const pick = process.argv.slice(2).map(Number).filter((n) => n > 0);
+  /* A NUMBER THAT NAMES NOTHING MUST FAIL, not pass emptily. `harness.js 9`
+     printed "all 0 scenarios passed" and exited 0 — and a roadmap milestone
+     whose proof is a scenario number would therefore tick itself before the
+     scenario was written, which is the one thing a proof exists to prevent. */
+  const unknown = pick.filter((n) => n > SCENARIOS.length);
+  if (unknown.length) {
+    console.log("  FAIL  no such scenario: " + unknown.join(", ") +
+                " (there are " + SCENARIOS.length + ")");
+    process.exitCode = 1;
+    return;
+  }
   for (let i = 0; i < SCENARIOS.length; i++) {
     const s = SCENARIOS[i];
     if (pick.length && !pick.includes(i + 1)) continue;
