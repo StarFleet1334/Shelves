@@ -29,6 +29,44 @@ globalThis.Shelves = globalThis.Shelves || {};
     return (loc.pathname.split("/").filter(Boolean)[0] || "").toLowerCase();
   };
 
+  /* github.com/<a>/<b> IS NOT A SHAPE, IT IS A GUESS. The same two segments
+   * serve /settings/appearance, /orgs/acme, /features/copilot and every
+   * marketing page GitHub has ever shipped, so matching on shape alone would
+   * hang a shelf chip off the pricing page.
+   *
+   * The list below is a DENY list rather than an allow list, and that is the
+   * direction that fails safe here: a reserved word nobody thought of costs
+   * one wrong chip on one page, while an allow list that misses a shape costs
+   * the whole feature everywhere. Both failures are visible; only one of them
+   * is small. */
+  const RESERVED = new Set([
+    "about", "account", "apps", "blog", "business", "codespaces", "collections",
+    "contact", "customer-stories", "dashboard", "enterprise", "events",
+    "explore", "features", "gist", "issues", "join", "login", "logout",
+    "marketplace", "new", "notifications", "orgs", "pricing", "pulls",
+    "readme", "search", "security", "sessions", "settings", "site", "sponsors",
+    "stars", "topics", "trending", "users", "watching", "welcome",
+  ]);
+
+  /** The repo's OWN landing page, and only that: a sub-page (issues, blob, …)
+   *  does not carry the About sidebar the chip belongs beside. */
+  S.isRepoPage = function isRepoPage(loc) {
+    loc = loc || location;
+    const parts = loc.pathname.split("/").filter(Boolean);
+    if (parts.length !== 2) return false;
+    if (RESERVED.has(parts[0].toLowerCase())) return false;
+    if (new URLSearchParams(loc.search).get("tab")) return false;
+    return true;
+  };
+
+  /** "owner/name" for the page we are standing on, lowercased like every other
+   *  key in the system. */
+  S.pageRepo = function pageRepo(loc) {
+    loc = loc || location;
+    const parts = loc.pathname.split("/").filter(Boolean);
+    return parts.length >= 2 ? (parts[0] + "/" + parts[1]).toLowerCase() : "";
+  };
+
   /* MEASURED (charter §4): a <ul> we build still matches
    * "#user-repositories-list ul". Without both guards below, a second pass
    * regroups our own output and nests the whole page inside one shelf.

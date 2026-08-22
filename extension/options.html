@@ -136,7 +136,20 @@
 
       <label class="inline" for="otherLabel">Name for the leftovers shelf</label>
       <input type="text" id="otherLabel" style="width:140px;flex:none" />
+
+      <label class="inline" for="prewarm">Keep the cache warm in the background</label>
+      <input type="checkbox" id="prewarm" />
     </div>
+    <p class="hint">
+      Off by default, and deliberately so. Everything else here spends a request
+      on a page you opened to see the result; this one refreshes a few repo
+      pages while you are elsewhere on github.com, so that a week-old cache is
+      never the fifteen seconds you wait for. It only refreshes repos it has
+      already seen, one at a time, at most
+      <strong><span id="warmBatchN">6</span></strong> per page you visit, never
+      on your Repositories tab, never in a background tab, and it stops on the
+      first refusal.
+    </p>
 
     <div class="foot">
       <button class="primary" id="save">Save</button>

@@ -188,14 +188,10 @@ globalThis.Shelves = globalThis.Shelves || {};
     return li;   // markup we do not recognise: the fallback is styled to wrap
   }
 
-  function margin(li, name, note, handlers) {
-    if (li.dataset.shMargin === "1") {
-      const held = li.querySelector(".sh-margin");
-      if (held) paintNote(held, note);
-      return;
-    }
-    li.dataset.shMargin = "1";
-
+  /** The marker on its own, with no opinion about where it goes — the profile
+   *  row places it in a text column, the repo page places it in a sidebar, and
+   *  neither placement should be able to change how a note is edited. */
+  S.noteMarker = function noteMarker(name, note, handlers) {
     const wrap = document.createElement("div");
     wrap.className = "sh-margin";
     const btn = document.createElement("button");
@@ -209,7 +205,17 @@ globalThis.Shelves = globalThis.Shelves || {};
 
     btn.addEventListener("click", () => edit(wrap, name, handlers));
     body.addEventListener("click", () => edit(wrap, name, handlers));
-    place(column(li), wrap);
+    return wrap;
+  };
+
+  function margin(li, name, note, handlers) {
+    if (li.dataset.shMargin === "1") {
+      const held = li.querySelector(".sh-margin");
+      if (held) paintNote(held, note);
+      return;
+    }
+    li.dataset.shMargin = "1";
+    place(column(li), S.noteMarker(name, note, handlers));
   }
 
   /* UNDER THE DESCRIPTION, NOT AFTER THE ROW. A note is commentary on the repo
@@ -284,8 +290,26 @@ globalThis.Shelves = globalThis.Shelves || {};
    * line — and the note above, which is the only text on the page that is
    * yours. Rows carry their haystack on themselves so a keystroke is a string
    * compare per row and not a re-derivation. */
-  S.applyFilter = function applyFilter(host, raw) {
+  /**
+   * @param {Element} host
+   * @param {string}  raw    what the reader typed, or the label of a set
+   * @param {?object} only   {names: Set|string[], label} — address rows BY NAME
+   *                         instead of by text
+   *
+   * TWO WAYS TO ADDRESS A ROW, because the audit asks a question no query can
+   * express. "the 12 repos with no description" is not a substring; there is
+   * no text a reader could type that means it. Faking one — searching for the
+   * empty string, or joining twelve names with a pipe — would put a lie in the
+   * find box and break the moment a name contained the separator. So a set of
+   * names is its own mode, the box goes empty and says what is being shown,
+   * and the reader's next keystroke drops straight back into text search.
+   */
+  S.applyFilter = function applyFilter(host, raw, only) {
     const q = String(raw || "").trim().toLowerCase();
+    const set = only && only.names
+      ? new Set([...only.names].map((n) => String(n).toLowerCase()))
+      : null;
+    const active = set ? set.size > 0 : !!q;
     let shown = 0, total = 0;
 
     /* THE ROWS ARE FILTERED FIRST AND THE SHELVES SECOND, because in flat mode
@@ -296,7 +320,9 @@ globalThis.Shelves = globalThis.Shelves || {};
     host.querySelectorAll("li").forEach((li) => {
       if (li.dataset.shHay === undefined) return;   // not one of ours
       total++;
-      const hit = !q || li.dataset.shHay.indexOf(q) !== -1;
+      const hit = set
+        ? set.has(li.dataset.shName || "")
+        : (!q || li.dataset.shHay.indexOf(q) !== -1);
       li.classList.toggle("sh-hide", !hit);
       if (hit) shown++;
     });
@@ -307,18 +333,22 @@ globalThis.Shelves = globalThis.Shelves || {};
       const hits = held.filter((li) => !li.classList.contains("sh-hide")).length;
 
       const c = d.querySelector(".sh-count");
-      if (c) c.textContent = q ? hits + " / " + count : String(count);
+      if (c) c.textContent = active ? hits + " / " + count : String(count);
       /* A shelf with no match is dimmed rather than removed: the shelves are
        * the map, and a map that reshuffles under a search is harder to read
        * than one that greys out. */
-      d.classList.toggle("sh-nomatch", !!q && hits === 0);
+      d.classList.toggle("sh-nomatch", active && hits === 0);
 
       /* FILTERING OPENS SHELVES, AND MUST NOT REMEMBER DOING SO. Searching
        * forces a shelf open to show its hits; without this the `toggle`
        * listener would write that to the collapse store and a cleared search
        * would leave every shelf you had closed hanging open forever. So the
-       * real state is parked on the first keystroke and put back on the last. */
-      if (q) {
+       * real state is parked on the first keystroke and put back on the last.
+       *
+       * `active`, not `q`: a name-set filter opens shelves exactly as a typed
+       * one does, and reading the typed query here would have parked the state
+       * on the way in and never restored it on the way out. */
+      if (active) {
         if (d.dataset.shWasOpen === undefined) d.dataset.shWasOpen = d.open ? "1" : "0";
         d.open = hits > 0;
       } else if (d.dataset.shWasOpen !== undefined) {
@@ -328,8 +358,13 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
 
     const bar = host.querySelector(".sh-found");
-    if (bar) bar.textContent = q ? shown + " of " + total : "";
-    host.dataset.filtering = q ? "1" : "";
+    if (bar) {
+      bar.textContent = !active ? ""
+        : (only && only.label)
+          ? shown + " " + only.label + " of " + total
+          : shown + " of " + total;
+    }
+    host.dataset.filtering = active ? "1" : "";
     return { shown, total };
   };
 
@@ -359,6 +394,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         li.dataset.shText = String(li.textContent || "").replace(/\s+/g, " ").trim();
       }
       margin(li, name, note, handlers);
+      li.dataset.shName = name;      // how the audit's findings address a row
       li.dataset.shHay = S.haystack(li.dataset.shText, facts[i], note);
     });
 
@@ -373,15 +409,22 @@ globalThis.Shelves = globalThis.Shelves || {};
     const flat = button("flat list", "GitHub's plain ungrouped list");
     const rescan = button("rescan", "Forget cached facts and read them again");
 
-    /* THE VOCABULARY IS BADGED BEFORE IT IS OPENED. A panel nobody opens tells
-     * nobody anything, and the whole premise is that these problems are
-     * invisible — so the button carries the count, and the reader learns there
-     * are three things wrong with their labelling without deciding to look. */
-    const vocab = button("vocabulary",
-      "Your topics as a system: duplicate spellings, blanket labels, and the " +
-      "ones used only once.");
+    /* ONE BUTTON FOR TWO QUESTIONS, because they are two questions about one
+     * collection — what is wrong with the labels (vocab.js) and what is
+     * missing from the repositories (audit.js) — and nobody wakes up wanting
+     * only one of them. A second button would also have to go somewhere, and
+     * this bar already wraps at 1200px.
+     *
+     * IT IS BADGED BEFORE IT IS OPENED. A panel nobody opens tells nobody
+     * anything, and the premise of both halves is that these problems are
+     * invisible; so the count rides on the CLOSED button and the reader learns
+     * there are six things to look at without deciding to look. */
+    const vocab = button("audit",
+      "Your collection, read back to you: duplicate topic spellings, blanket " +
+      "labels, and the repos missing a description, a README or a licence.");
     const vdata = S.vocabulary(topics, names);
-    const issues = S.vocabIssues(vdata);
+    const adata = S.audit(facts, names, topics);
+    const issues = S.vocabIssues(vdata) + S.auditIssues(adata);
     if (issues) {
       const badge = document.createElement("span");
       badge.className = "sh-vbadge";
@@ -417,6 +460,18 @@ globalThis.Shelves = globalThis.Shelves || {};
       w.textContent = warning;
       note.append(" · ", w);
     }
+    /* THE CANARY GOES WHERE THE OTHER BAD NEWS GOES. It is the same kind of
+     * statement as "token rejected (401)" — something upstream is not what we
+     * assumed — and giving it its own banner would teach the reader to look in
+     * two places for one class of problem. It is drawn louder than a warning
+     * when it is grave, because a moved sidebar means every shelf on the page
+     * is wrong, and that is not a footnote. */
+    if (ctx.health) {
+      const h = document.createElement("span");
+      h.className = "sh-warn sh-canary";
+      h.textContent = ctx.health;
+      note.append(" · ", h);
+    }
 
     bar.append(expand, collapse, flat, rescan, vocab, find, found, note);
     host.appendChild(bar);
@@ -433,7 +488,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         else vocab.dataset.on = "1";
         return;
       }
-      panel = S.vocabPanel(vdata, {
+      const kit = S.panelKit({
         identity: marks,
         /* A topic press is a SEARCH, not a regrouping. The filter already
          * matches topics, so the panel needs no machinery of its own — and the
@@ -444,7 +499,29 @@ globalThis.Shelves = globalThis.Shelves || {};
           S.applyFilter(host, topic);
           find.focus();
         },
+        /* An audit finding cannot be a query, so it addresses rows by name.
+         * The box is emptied rather than filled with something unreadable —
+         * and the next keystroke drops straight back into text search, which
+         * is the only behaviour that does not need explaining. */
+        onRepos: (names_, label) => {
+          find.value = "";
+          S.applyFilter(host, "", { names: names_, label });
+        },
       });
+      panel = document.createElement("div");
+      panel.className = "sh-vocab";
+      const head = document.createElement("div");
+      head.className = "sh-v-head";
+      const title = document.createElement("span");
+      title.className = "sh-v-title";
+      title.textContent = "audit";
+      const sum = document.createElement("span");
+      sum.className = "sh-v-sum";
+      sum.textContent = rows.length + " repos · nothing here was fetched for this";
+      head.append(title, sum);
+      panel.append(head);
+      S.vocabSection(vdata, kit).forEach((n) => panel.append(n));
+      S.auditSection(adata, kit).forEach((n) => panel.append(n));
       vocab.dataset.on = "1";
       bar.insertAdjacentElement("afterend", panel);
     });
@@ -493,6 +570,24 @@ globalThis.Shelves = globalThis.Shelves || {};
 
       host.appendChild(d);
     });
+
+    /* WHAT THIS PAGE WORKED OUT, LEFT WHERE THE OTHER PAGES CAN READ IT.
+     * A repo's own page can see its own topics but not its neighbours', and
+     * both the shelf a repo lands on and — more sharply — the COLOUR that
+     * shelf wears are properties of the whole collection: `identity()` resolves
+     * palette collisions across every label at once. So the page that knows
+     * writes it down, and the pages that cannot work it out read it rather than
+     * guessing a different answer. Derived, disposable, rewritten every render.
+     *
+     * Fire and forget: a failed write costs the chip its colour on another
+     * page and must never cost this render (P.III). */
+    Promise.resolve(
+      S.shelfmap.write(owner, {
+        order,
+        counts: Object.fromEntries(order.map((l) => [l, buckets.get(l).length])),
+        names: names.filter(Boolean),
+      })
+    ).catch(() => {});
 
     expand.addEventListener("click", () =>
       host.querySelectorAll("details").forEach((d) => (d.open = true))

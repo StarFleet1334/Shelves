@@ -47,6 +47,7 @@
 <script src="../extension/src/dom.js"></script>
 <script src="../extension/src/facts.js"></script>
 <script src="../extension/src/vocab.js"></script>
+<script src="../extension/src/audit.js"></script>
 <script src="../extension/src/view.js"></script>
 <script>
 /* THE REAL MODULES, NOT A COPY OF THEM. identity() and vocabPanel() are called
@@ -73,8 +74,19 @@ const TOPICS = [
 ];
 const NAMES = ["octo/alpha", "octo/beta", "octo/gamma",
                "octo/delta", "octo/epsilon", "octo/zeta"];
+/* Two sources answering one collection, so the audit's caveat renders too —
+   the API body carries no README and the panel has to say so rather than
+   report a gap it was never in a position to measure. */
+const FACTS = [
+  { via: "page", description: "one", readme: "r", license: "MIT" },
+  { via: "page", description: "two" },
+  { via: "page" },
+  { via: "api", description: "four", license: "MIT" },
+  { via: "api" },
+  { via: "page", description: "six", readme: "r", license: "MIT", archived: true },
+];
 
-function bar(vdata) {
+function bar(vdata, adata) {
   const b = document.createElement("div");
   b.className = "sh-bar";
   ["expand all", "collapse all", "flat list", "rescan"].forEach((t) => {
@@ -83,11 +95,11 @@ function bar(vdata) {
     b.append(x);
   });
   const v = document.createElement("button");
-  v.type = "button"; v.className = "sh-btn"; v.textContent = "vocabulary";
+  v.type = "button"; v.className = "sh-btn"; v.textContent = "audit";
   v.dataset.on = "1";
   const badge = document.createElement("span");
   badge.className = "sh-vbadge";
-  badge.textContent = String(S.vocabIssues(vdata));
+  badge.textContent = String(S.vocabIssues(vdata) + S.auditIssues(adata));
   v.append(" ", badge);
   b.append(v);
 
@@ -105,8 +117,24 @@ function build(into) {
   host.id = "shelves-host";
 
   const vdata = S.vocabulary(TOPICS, NAMES);
-  host.append(bar(vdata));
-  host.append(S.vocabPanel(vdata, { identity: MARKS, onPick: () => {} }));
+  const adata = S.audit(FACTS, NAMES, TOPICS);
+  host.append(bar(vdata, adata));
+
+  const kit = S.panelKit({ identity: MARKS, onPick: () => {}, onRepos: () => {} });
+  const panel = document.createElement("div");
+  panel.className = "sh-vocab";
+  const head = document.createElement("div");
+  head.className = "sh-v-head";
+  const t = document.createElement("span");
+  t.className = "sh-v-title"; t.textContent = "audit";
+  const sm = document.createElement("span");
+  sm.className = "sh-v-sum";
+  sm.textContent = "6 repos · nothing here was fetched for this";
+  head.append(t, sm);
+  panel.append(head);
+  S.vocabSection(vdata, kit).forEach((n) => panel.append(n));
+  S.auditSection(adata, kit).forEach((n) => panel.append(n));
+  host.append(panel);
 
   ORDER.forEach((label, i) => {
     const d = document.createElement("details");

@@ -18,9 +18,10 @@ rather than guessed:
 
 1. **The ladder short-circuits on the first repo it can answer.** One repo with
    topic chips on the page returns `via page` for all of them, and the other
-   seventy-five land in Ungrouped having cost zero requests. Rung 1 renders
-   nothing today, so this is latent — and the day GitHub restores chips is the
-   day SHELVES gets *worse*, because a partial rollout is the likely shape.
+   seventy-five land in Ungrouped having cost zero requests. This was written as
+   latent, on the measurement that rung 1 rendered nothing — *"the day GitHub
+   restores chips is the day SHELVES gets worse"*. **That day was 2026-08-22.**
+   It is now the first thing on this list by a distance.
 2. **A first run for someone who has never tagged a repo produces the page they
    already had.** Fifteen seconds of fetching, then one shelf called Ungrouped
    holding all 76. Everything under *the first day* exists to close that,
@@ -35,11 +36,15 @@ rather than guessed:
 - [x] A PRIVATE MARGIN — one local note per repo, painted on the row, searchable, and never taken by a rescan `proof: node tests/harness.js note`
 - [x] THE VOCABULARY PANEL — the tag system read as a system: spellings of one idea merged, one-character neighbours and narrower words offered as suspicions, blanket labels and single-use topics named, every topic listed and pressable. No request, no storage, nothing written `proof: node tests/harness.js vocabulary`
 - [x] SHELF IDENTITY — a hue and a glyph per shelf, hashed from the name so nothing is stored and nothing can drift; two channels so either one alone identifies a shelf; measured in a real browser for tofu and for 3:1 contrast against both themes `proof: node tests/harness.js identity`
+- [x] THE MARK FOLLOWS THE REPO — a repo's own page wears its shelf's glyph, name and colour, links back to the shelves, and carries the private note, editable in place. Costs no request; reads the shelf map the profile page leaves behind rather than guessing a colour that would disagree `proof: node tests/harness.js mark`
+- [x] THE REPO AUDIT — what is missing across the collection (topics, description, README, licence) and what is archived, each denominated ONLY over the repos whose source could have answered, with what could not be asked said out loud `proof: node tests/harness.js audit`
+- [x] BACKGROUND TOP-UP — the stalest cache entries refreshed while you are elsewhere on github.com, so a week-old cache is never fifteen seconds of waiting. Opt-in, one at a time, bounded per visit, never on the profile tab, stops on the first refusal `proof: node tests/harness.js warm`
+- [x] THE CANARY — a moved selector is SAID rather than silently absorbed: the anchors each parse could find are tallied, and below five pages read there is deliberately no opinion `proof: node tests/harness.js canary`
 - [ ] drive `facts.js` against a REAL logged-in repo page and demote anything that does not read — only `topics` and `description` are measured; the other eight prefer <meta> and href shapes over class names, which is a hedge, not a proof `proof: node tests/harness.js real-page`
 
 ## The ladder must be honest
 
-- [ ] the ladder answers PER REPO, not per page — chips found on some rows are a floor, and the repos they did not answer still climb to the API and the repo pages `proof: node tests/harness.js ladder-floor`
+- [ ] **LIVE, no longer latent.** the ladder answers PER REPO, not per page — chips found on some rows are a floor, and the repos they did not answer still climb to the API and the repo pages. Observed 2026-08-22: GitHub now renders chips in the profile list, so a 77-repo account resolved `via page` on 9 rows and left 68 in Ungrouped for zero requests `proof: node tests/harness.js ladder-floor`
 - [ ] a repo page that could not be read is SAID, not silently Ungrouped — the toolbar counts them (`3 unread`) and names rescan as the cure `proof: node tests/harness.js unread`
 - [ ] a rejected token falls back to the UNAUTHENTICATED api before scraping 76 pages, and the source line says which of the two answered `proof: node tests/harness.js token-fallback`
 - [ ] the scrape path has a ceiling and a *continue* — above `scrapeMax` repos it reads that many, says how many are left and offers to read the rest, so 400 untagged repos is a choice rather than 400 requests `proof: node tests/harness.js ceiling`
@@ -66,7 +71,7 @@ rather than guessed:
 
 ## Reach
 
-- [ ] the same lens on `?tab=stars` — starred repos are the list that most needs shelving and the one nobody can tag `proof: node tests/harness.js stars-tab`
+- [ ] the same lens on `?tab=stars` — starred repos are the list that most needs shelving and the one nobody can tag. Route 2 (`mark.js`) proved the content script can stand somewhere other than the profile tab; this is the same move for a list `proof: node tests/harness.js stars-tab`
 - [ ] org repositories, driven against a real org page rather than claimed `proof: node tests/harness.js org-page`
 - [ ] EXPORT and IMPORT the shelf layout as JSON, so a team can share one set of shelves `proof: node tests/harness.js export`
 - [ ] the options page exposes what the store already carries — concurrency, page depth, the scrape ceiling — instead of defaults nobody can reach `proof: node tests/harness.js options-reach`
@@ -88,6 +93,10 @@ rather than guessed:
 
 ## Open questions
 
+- The top-up refreshes what it has already seen and never discovers, so a repo
+  created since your last visit to the Repositories tab is still a cold read.
+  Warming from `shelfMap.names` instead of the cache's own keys would close
+  that, at the cost of fetching pages nobody has asked for yet.
 - Is a week the right cache TTL? It is configurable, but the default was picked
   by feel and has not been measured against how often anyone re-tags.
 - Should an override survive a repo being renamed? Everything is keyed by

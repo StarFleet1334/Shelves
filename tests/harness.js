@@ -11,8 +11,8 @@
  */
 "use strict";
 
-const { build, readShelves, settle, type, writeNote, openVocab, pickTerm } =
-  require("./world");
+const { build, readShelves, settle, type, writeNote, openVocab, pickTerm,
+        pickGap, readMark } = require("./world");
 
 let failures = 0;
 const results = [];
@@ -448,15 +448,25 @@ const SCENARIOS = [
     if (!v) return;
 
     const p = openVocab(w.win);
-    assert(ctx, p.open, "the vocabulary button must open the panel");
+    assert(ctx, p.open, "the audit button must open the panel");
     if (!p.open) return;
 
     /* THE BADGE IS THE POINT. A panel nobody opens tells nobody anything, and
        the premise is that these problems are invisible - so the count has to be
-       on the CLOSED button. 1 family + 3 suspicions + 1 blanket + 1 habit. */
-    assert(ctx, p.badge === 6, "the toolbar must badge 6 findings, got " + p.badge);
-    assert(ctx, /6 repos/.test(p.sum) && /6 tagged/.test(p.sum) && /6 topics/.test(p.sum),
-      "the panel counts its own subject, got: " + p.sum);
+       on the CLOSED button.
+
+       NINE, not six: the topics half finds 1 family + 3 suspicions + 1 blanket
+       + 1 habit, and the repos half finds three gaps beside it (none of these
+       fixtures carries a description, a README or a licence). One button, one
+       count, both questions - which is the arrangement being asserted here. */
+    assert(ctx, w.win.Shelves.vocabIssues(
+      w.win.Shelves.vocabulary(
+        [["project", "ai-project"], ["project", "ai-project"], ["project", "aiproject"],
+         ["project", "ai"], ["project", "kubernetes"], ["kubernets"]], [])) === 6,
+      "the topics half alone must find 6");
+    assert(ctx, p.badge === 9, "the toolbar must badge every finding, got " + p.badge);
+    assert(ctx, /6 of 6 repos tagged/.test(p.sub) && /6 topics/.test(p.sub),
+      "the topics section counts its own subject, got: " + p.sub);
 
     const kinds = (k) => p.finds.filter((f) => f.kind === k);
 
@@ -510,6 +520,376 @@ const SCENARIOS = [
       "pressing a topic filters the page to its repos, got: " + v.visible.join());
 
     ctx.info = p.badge + " findings over " + p.terms.length + " topics";
+  }),
+
+  check("audit - what is missing from the REPOS, honestly denominated", async (ctx) => {
+    /* Two sources answer this collection, which is the whole point of the
+       scenario: `a` and `b` come from the API and `c`/`d`/`e` from their own
+       pages. The API body carries no README at all, so a README gap counted
+       over all five would be reporting the API's shape as the reader's
+       failing - on a token-holding account, for every repo they own. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [
+        { name: "a", topics: [], description: "public one", license: "MIT" },
+        { name: "b", topics: [], license: "MIT" },
+        { name: "c", topics: ["keep"], private: true, description: "private one",
+          license: "MIT", readme: "It reads like this." },
+        { name: "d", topics: [], private: true },
+        { name: "e", topics: [], private: true, description: "done with", archived: true },
+      ],
+      apiRepos: [
+        { name: "a", topics: [], description: "public one", license: "MIT" },
+        { name: "b", topics: [], license: "MIT" },
+      ],
+    });
+    await settle(1400);
+    let v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+
+    const A = w.win.Shelves.audit;
+    const p = openVocab(w.win);
+    const gap = Object.fromEntries(
+      p.finds.filter((f) => f.kind === "gap" || f.kind === "archived")
+        .map((f) => [f.tag, f])
+    );
+
+    assert(ctx, /4 of 5/.test((gap["no topics"] || {}).text || ""),
+      "4 of 5 have no topics, got: " + (gap["no topics"] || {}).text);
+
+    /* THE LOAD-BEARING ASSERTION. Three repos were read from their own pages
+       and could therefore be asked about a README; two were answered by the
+       API and could not. The denominator has to be 3. */
+    const readme = (gap["no README"] || {}).text || "";
+    assert(ctx, /2 of 3/.test(readme),
+      "a README gap is denominated over the repos whose source could carry one, got: " +
+      readme);
+    assert(ctx, /readme/.test(p.caveat) && /2 repos/.test(p.caveat),
+      "and what could not be asked is SAID, not silently dropped, got: " + p.caveat);
+
+    /* Description and licence are carried by both sources, so those denominate
+       over all five - the rule is per field, not per record. */
+    assert(ctx, /2 of 5/.test((gap["no description"] || {}).text || ""),
+      "descriptions denominate over everything, got: " + (gap["no description"] || {}).text);
+    assert(ctx, /1 of 5/.test((gap.archived || {}).text || ""),
+      "the archived repo is named, got: " + (gap.archived || {}).text);
+
+    /* An audit finding is not a query anyone could type, so it addresses rows
+       by NAME - and that mode has to move the same page the text filter does. */
+    pickGap(w.win, "no README");
+    v = readShelves(w.win);
+    assert(ctx, v.visible.sort().join() === "d,e",
+      "pressing a finding shows exactly those repos, got: " + v.visible.join());
+    assert(ctx, /no README/.test(v.found),
+      "and the bar says which set it is showing, got: " + v.found);
+
+    // the reader's next keystroke drops straight back into text search
+    type(w.win, "private one");
+    v = readShelves(w.win);
+    assert(ctx, v.visible.join() === "c",
+      "typing leaves the name-set mode, got: " + v.visible.join());
+    type(w.win, "");
+    v = readShelves(w.win);
+    assert(ctx, v.visible.length === 5, "and clearing restores every row");
+
+    // the pure function, asked directly, for the shape rather than the wording
+    const direct = A(
+      [{ via: "api" }, { via: "api" }, { via: "page", readme: "x" }, { via: "page" }],
+      ["o/a", "o/b", "o/c", "o/d"], [[], [], [], []]
+    );
+    const r = direct.gaps.find((g) => g.key === "noreadme");
+    assert(ctx, r && r.of === 2 && r.names.join() === "o/d",
+      "audit() itself never asks a source a question it cannot answer");
+    ctx.info = "gaps denominated per field, per source";
+  }),
+
+  check("mark - the shelf follows the repo onto its own page", async (ctx) => {
+    const w = build({
+      owner: "octo",
+      at: "octo/throttle-kit",
+      settings: { groups: ["rag", "tooling"] },
+      page: { topics: ["rag"], description: "Token bucket rate limiting" },
+      notes: { "octo/throttle-kit": "the one with the broken deploy" },
+    });
+    await settle();
+
+    const m = readMark(w.win);
+    assert(ctx, m, "no chip on the repo's own page");
+    if (!m) return;
+
+    assert(ctx, m.label === "rag", "it names the shelf, got: " + m.label);
+    assert(ctx, m.href === "/octo?tab=repositories",
+      "and links back to the shelves, got: " + m.href);
+    assert(ctx, m.inSidebar,
+      "the chip belongs beside the topics that put it on that shelf");
+
+    /* THE COLOUR MUST BE THE SAME COLOUR. identity() resolves palette
+       collisions across the whole label set, so a page that guessed from one
+       label would produce a chip that disagrees with the shelves - and a mark
+       that disagrees is worse than no mark. */
+    const want = w.win.Shelves.identity(["rag", "tooling", "Ungrouped"], "Ungrouped").get("rag");
+    assert(ctx, m.glyph === want.glyph && m.hue === String(want.hue),
+      "the chip wears the shelf's own mark, got " + m.glyph + "/" + m.hue +
+      " want " + want.glyph + "/" + want.hue);
+
+    /* The note is the reason this beats a breadcrumb: it exists nowhere on
+       GitHub and was previously only visible on a page you had left. */
+    assert(ctx, m.note === "the one with the broken deploy",
+      "the private note comes with it, got: " + m.note);
+
+    // FREE. This is a page the reader opened to read code, not to be shelved.
+    assert(ctx, w.counters.api === 0 && w.counters.scraped.length === 0,
+      "the mark must cost no request at all");
+
+    // idempotent, like run(): turbo fires repeatedly and the observer wakes often
+    w.win.document.dispatchEvent(new w.win.Event("turbo:render"));
+    w.win.document.body.appendChild(w.win.document.createElement("div"));
+    await settle();
+    assert(ctx, w.win.document.querySelectorAll("#shelves-mark").length === 1,
+      "a second pass must not hang a second chip");
+
+    /* github.com/<a>/<b> is a guess, not a shape. */
+    const P = w.win.Shelves.isRepoPage;
+    const at = (path, search) => P({ pathname: path, search: search || "" });
+    assert(ctx, at("/octo/throttle-kit"), "a real repo page");
+    assert(ctx, !at("/settings/appearance"), "settings is not a repository");
+    assert(ctx, !at("/orgs/acme"), "nor is an org page");
+    assert(ctx, !at("/features/copilot"), "nor a marketing page");
+    assert(ctx, !at("/octo/throttle-kit/issues"), "nor a sub-page: no About sidebar");
+    assert(ctx, !at("/octo", "?tab=repositories"), "nor the profile tab itself");
+
+    /* THE CLASS IS A FAST PATH, NOT THE FINDER. Measured on a real logged-in
+       repo page: neither `.Layout-sidebar` nor the testid matched, and the chip
+       never appeared beside an About panel that was plainly on screen. A class
+       name is the half of GitHub's markup that churns, so the fallback climbs
+       from the "About" heading to the first ancestor holding another sidebar
+       landmark. */
+    const moved = build({
+      owner: "octo",
+      at: "octo/throttle-kit",
+      settings: { groups: ["rag", "tooling"] },
+      page: { topics: ["rag"], sidebarClass: "AboutPanel-module__container--x7f2k" },
+    });
+    await settle();
+    const mm = readMark(moved.win);
+    assert(ctx, mm && mm.label === "rag",
+      "a renamed sidebar must not cost the chip, got: " + JSON.stringify(mm));
+    assert(ctx, mm && mm.box.parentElement &&
+      /AboutPanel/.test(mm.box.parentElement.className),
+      "and it still lands INSIDE the panel it belongs to, got: " +
+      (mm && mm.box.parentElement ? mm.box.parentElement.className : "nowhere"));
+
+    /* ...and a page with neither an About panel nor a title still draws
+       nothing, because a chip in the wrong place is worse than no chip. */
+    const bare = build({
+      owner: "octo", at: "octo/nothing-here",
+      settings: { groups: ["rag"] },
+      page: { topics: [], sidebarClass: "x", noAbout: true },
+    });
+    await settle();
+    assert(ctx, readMark(bare.win) === null,
+      "with nowhere safe to sit, it draws nothing rather than guessing");
+    ctx.info = m.glyph + " " + m.label + " + note, zero requests; survives a renamed sidebar";
+  }),
+
+  check("mark degrades - no shelf map means no colour, never a wrong one",
+    async (ctx) => {
+      /* Auto-grouping derives its labels from every repo's topics, which a
+         single repo page cannot see. With no map written by the profile page
+         there is genuinely no way to know the palette, so the chip names the
+         shelf and declines to claim a colour. */
+      const w = build({
+        owner: "octo",
+        at: "octo/throttle-kit",
+        settings: { groups: [] },
+        page: { topics: ["rag"] },
+      });
+      await settle();
+      let m = readMark(w.win);
+      assert(ctx, m, "a missing map must not cost the chip");
+      if (!m) return;
+      assert(ctx, m.label === "rag", "the shelf is still named, got: " + m.label);
+      assert(ctx, m.plain && m.hue === "",
+        "but no colour is invented, got hue=" + m.hue);
+
+      /* Given the map the profile page leaves behind, the same page now agrees
+         with the shelves exactly. */
+      const w2 = build({
+        owner: "octo",
+        at: "octo/throttle-kit",
+        settings: { groups: [] },
+        page: { topics: ["rag"] },
+        shelfMap: { octo: { order: ["aiproject", "rag", "tooling", "Ungrouped"],
+                            counts: { rag: 7 }, at: Date.now() } },
+      });
+      await settle();
+      m = readMark(w2.win);
+      const want = w2.win.Shelves.identity(
+        ["aiproject", "rag", "tooling", "Ungrouped"], "Ungrouped").get("rag");
+      assert(ctx, m && !m.plain && m.hue === String(want.hue) && m.glyph === want.glyph,
+        "with the map it matches the shelves exactly, got " +
+        JSON.stringify(m && [m.glyph, m.hue]));
+      assert(ctx, m && m.count === "7", "and carries the shelf's size, got: " + (m || {}).count);
+
+      /* THE LEFTOVERS CHIP KEEPS ITS DOT. Caught in a real browser: the glyph
+         was inside the branch that paints the colour, and the plain shelf has
+         no colour by design — so `Ungrouped` wore its dot on the shelf and
+         nothing at all on the chip. Two drawings of one thing that disagree is
+         the exact failure the identity system exists to prevent. */
+      const w3 = build({
+        owner: "octo",
+        at: "octo/untagged-thing",
+        settings: { groups: ["rag"] },
+        page: { topics: [] },
+      });
+      await settle();
+      const u = readMark(w3.win);
+      assert(ctx, u && u.label === "Ungrouped" && u.plain,
+        "a repo with no topics lands on the leftovers shelf, got: " + JSON.stringify(u));
+      assert(ctx, u && u.glyph === "·",
+        "and still wears the mark the shelf wears, got: " + JSON.stringify((u || {}).glyph));
+      ctx.info = "no map: named but uncoloured; with map: identical to the shelf";
+    }),
+
+  check("warm - opt-in, bounded, and it never discovers", async (ctx) => {
+    const day = 86400000;
+    const now = Date.now();
+    const w = build({
+      owner: "octo",
+      at: "octo/throttle-kit",
+      page: { topics: ["rag"] },
+      // what exists on this fake GitHub, so a top-up fetch can resolve
+      repos: ["old-one", "older", "oldest", "fresh"].map((n) => ({
+        name: n, topics: ["rag"], description: "warmed",
+      })),
+      cache: {
+        "octo/old-one": { at: now - 6 * day, topics: [] },
+        "octo/older": { at: now - 20 * day, topics: [] },
+        "octo/oldest": { at: now - 40 * day, topics: [] },
+        "octo/fresh": { at: now - 60000, topics: ["rag"] },
+      },
+    });
+    await settle();
+    const S = w.win.Shelves;
+    const base = { cacheDays: 7, warmBatch: 2, prewarm: true };
+
+    /* OFF BY DEFAULT, AND IT HAS TO BE. Everything else here spends a request
+       on a page the reader opened to see the result; this spends them on pages
+       they opened for something else, which needs its own consent (P.II). */
+    const off = await S.warm({ ...base, prewarm: false }, { gap: 0, now });
+    assert(ctx, off.warmed === 0 && off.why === "off",
+      "prewarm must default off, got: " + JSON.stringify(off));
+    const loaded = await S.load();
+    assert(ctx, loaded.prewarm === false,
+      "and the stored default must be off, got: " + loaded.prewarm);
+
+    const before = w.counters.scraped.length;
+    const out = await S.warm(base, { gap: 0, now });
+
+    assert(ctx, out.warmed === 2,
+      "the budget is warmBatch and no more, warmed " + out.warmed);
+    const fetched = w.counters.scraped.slice(before);
+    /* STALEST FIRST, or a budget of two spent over many visits circles the
+       same two names and the rest of the cache never gets refreshed at all. */
+    assert(ctx, fetched.join() === "octo/oldest,octo/older",
+      "the stalest are refreshed first, got: " + fetched.join());
+    assert(ctx, fetched.indexOf("octo/fresh") === -1,
+      "and a fresh entry is left alone");
+
+    /* IT REFRESHES; IT NEVER DISCOVERS. A first run is still cold - the point
+       is that the second week is not. */
+    assert(ctx, !w.counters.scraped.some((n) => n === "octo/throttle-kit"),
+      "the repo we are standing on is not in the cache and must not be fetched");
+
+    const after = w.store.local.repoFacts || {};
+    assert(ctx, after["octo/oldest"] && after["octo/oldest"].at > now - 1000,
+      "and the refreshed entry is written back");
+    assert(ctx, after["octo/oldest"] && after["octo/oldest"].saw === undefined,
+      "a parse's own evidence must never reach the cache");
+
+    // The profile tab warms itself; two writers on one cache is a race.
+    const w2 = build({ owner: "octo", settings: {}, repos: [{ name: "x", chips: ["a"] }] });
+    await settle();
+    const onTab = await w2.win.Shelves.warm(base, { gap: 0, now });
+    assert(ctx, onTab.warmed === 0 && /profile tab/.test(onTab.why),
+      "it must stand down on the page the ladder already owns, got: " + onTab.why);
+
+    /* A background job that keeps knocking through a 429 is how a convenience
+       gets the foreground throttled. */
+    const w3 = build({
+      owner: "octo", at: "octo/throttle-kit", page: { topics: [] },
+      repos: [{ name: "a", topics: [] }, { name: "b", topics: [] }],
+      cache: {
+        "octo/a": { at: now - 40 * day, topics: [] },
+        "octo/b": { at: now - 40 * day, topics: [] },
+      },
+    });
+    await settle();
+    w3.win.fetch = async () => ({ ok: false, status: 429, text: async () => "" });
+    const hit = await w3.win.Shelves.warm({ ...base, warmBatch: 2 }, { gap: 0, now });
+    assert(ctx, hit.warmed === 0 && /429/.test(hit.why),
+      "one refusal ends the visit, got: " + JSON.stringify(hit));
+    ctx.info = "off by default; " + out.warmed + " stalest refreshed; stops on 429";
+  }),
+
+  check("canary - a moved selector is SAID, not silently absorbed", async (ctx) => {
+    /* The pages still carry their topics, and the parse still returns
+       something that looks right - the About panel is simply no longer called
+       `.Layout-sidebar` and the description meta is gone. That is precisely the
+       failure worth catching: a page that came back empty would have been
+       obvious without a canary. */
+    const broken = (n) => ({ name: n, topics: ["keep"], private: true, broken: true });
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      repos: [broken("a"), broken("b"), broken("c"), broken("d"),
+              broken("e"), broken("f")],
+    });
+    await settle(1600);
+    const v = readShelves(w.win);
+    assert(ctx, v, "a broken page must never cost the render");
+    if (!v) return;
+
+    assert(ctx, /changed shape/.test(v.canary),
+      "the canary must say the page moved, got: " + JSON.stringify(v.canary));
+    assert(ctx, /unreliable/.test(v.canary),
+      "and say it gravely when it is the SIDEBAR that moved - every shelf on " +
+      "the page depends on it, got: " + v.canary);
+    assert(ctx, /read 6 pages/.test(v.canary),
+      "with the sample it is speaking from, got: " + v.canary);
+    // it must still shelve: a warning is not a failure (P.III)
+    const total = v.shelves.reduce((n, s) => n + s.count, 0);
+    assert(ctx, total === 6, "every repo is still on the page, got " + total);
+
+    /* FIVE PAGES IS THE FLOOR. Below it a run of genuinely sparse repos is
+       indistinguishable from a dead selector, and a canary that cries on a
+       sample of two is turned off within a week. */
+    const small = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      repos: [broken("a"), broken("b"), broken("c"), broken("d")],
+    });
+    await settle(1400);
+    assert(ctx, readShelves(small.win).canary === "",
+      "four pages is not a sample, got: " + readShelves(small.win).canary);
+
+    // and a healthy run says nothing at all
+    const ok = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      repos: "abcdef".split("").map((n) => ({
+        name: n, topics: ["keep"], private: true, description: "fine",
+      })),
+    });
+    await settle(1600);
+    assert(ctx, readShelves(ok.win).canary === "",
+      "an intact page must be silent, got: " + readShelves(ok.win).canary);
+    ctx.info = "6 broken pages named; 4 below the floor; a healthy run quiet";
   }),
 
   check("identity - a colour and a glyph per shelf, derived and stable", async (ctx) => {

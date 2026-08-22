@@ -11,14 +11,19 @@ Then it does things the page cannot. `/` searches your repositories by
 is all GitHub's own box can match. Every row carries a **private note**, kept in
 your browser, that nothing on GitHub offers anywhere. Every shelf wears a
 **colour and a glyph** so you find one by recognising it rather than by reading.
-And **vocabulary** shows you your own topics as a system — which of them are
-three spellings of one idea, which are on everything and therefore group
-nothing, and which were used once and never again.
+And **audit** reads the collection back to you: which topics are three spellings
+of one idea, which are on everything and therefore group nothing, and which of
+your repos have no description, no README or no licence.
+
+It no longer lives on one page. Open a repo and it wears its shelf's mark, in the
+shelf's colour, with your private note — and if you let it, it quietly keeps its
+cache warm while you are elsewhere on GitHub so you never wait fifteen seconds
+for a cold read again.
 
 It is a lens, not an editor. It never writes to your GitHub account.
 
 ```
-┌ expand all · collapse all · flat list · rescan · vocabulary 4 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via repo pages ┐
+┌ expand all · collapse all · flat list · rescan · audit 9 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via repo pages ┐
 
 ▾ aiproject                                                                                         12
     chat-agent          Python  ★2   Updated 2 days ago      Private
@@ -126,9 +131,13 @@ now solves for its own lightness and clears **4.3:1 against both** `#ffffff` and
 `#0d1117`, with no theme detection anywhere. See `tests/identity.html` and
 `tests/glyph-probe.html`.
 
-### Vocabulary
+### Audit
 
-Press **vocabulary** in the toolbar. GitHub will show you one repo's topics, and
+Press **audit** in the toolbar. It opens one panel with two sections, because
+they are two questions about one collection: what is wrong with your **topics**,
+and what is missing from your **repositories**.
+
+#### Topics GitHub will show you one repo's topics, and
 it will show you every repo carrying one topic — but nothing anywhere shows you
 your labelling vocabulary *as a whole*, which is exactly why it rots: every
 individual decision looked fine.
@@ -153,6 +162,91 @@ panel and the page below it are visibly the same map.
 It reads the topics the ladder already resolved: no request, no storage, and
 nothing written anywhere. Acting on what it says is still your job on GitHub,
 because editing topics would be a write and principle I says no.
+
+#### Repositories
+
+The other half counts what is missing across the whole collection — no topics,
+no description, no README, no licence — and what is archived but still shelved
+among live work. GitHub can tell you *one* repo has no description; it has never
+told anyone they have twelve, and twelve is the number that changes an
+afternoon.
+
+Each finding has a **SHOW** button that filters the page to exactly those repos.
+That is a second addressing mode, not a search: *"the 12 with no description"* is
+not a substring anyone could type, so it addresses rows by name and the find box
+goes empty rather than filling with something unreadable. Your next keystroke
+drops straight back into text search.
+
+**The denominators are the honest part.** A count reads *2 of 4*, not *2 of 6*,
+because two of those repos were answered by the GitHub API — whose body carries
+no README at all — and asking them about a README would be reporting the API's
+shape as your failing. On an account with a token, that would be every repo you
+own. Whatever could not be asked is printed under the findings rather than
+silently narrowing the denominator. This is principle XIII in the charter, and
+it is there because an audit that quietly over-reports looks exactly like one
+that works.
+
+### The mark on a repo's own page
+
+Open any of your repositories and a chip sits at the top of the About sidebar:
+the shelf's glyph, its name in its colour, the shelf's size, and a link back to
+the shelves. Your private note comes with it, editable right there — which is
+where you actually are when you remember something about a repo.
+
+It is beside the topics on purpose. The shelf is the *consequence* of the
+topics, and putting the answer next to its own input is the only placement that
+needs no explaining.
+
+**It fetches nothing.** Every input is already on the page or in local storage,
+which is what makes it safe on a page you opened to read code.
+
+The colour needs the whole collection to be correct — palette collisions are
+resolved across every shelf at once — so the Repositories tab writes the shelf
+list down and this page reads it. Without it (you have never opened your
+shelves, and you are auto-grouping) the chip still names the shelf and simply
+**declines to claim a colour**. A mark that disagrees with the shelves would be
+worse than no mark.
+
+### Keeping the cache warm (off by default)
+
+A first run with an empty cache is fifteen seconds of fetching, and the cache
+expires, so it comes back every week. Turn on **Keep the cache warm in the
+background** in options and SHELVES refreshes the stalest few entries while you
+are elsewhere on github.com.
+
+It is off by default and stays that way, deliberately: everything else here
+spends a request on a page you opened to see the result, and this spends them on
+pages you opened for something else. That is a different kind of cost and it
+needs its own consent.
+
+The guards are the feature. It runs **only** where you are already on GitHub,
+**never** on your Repositories tab (the ladder owns that page), **never** in a
+background tab, one repo at a time with a gap, at most six per page you visit,
+stalest first — and it **stops dead on the first refusal**, because a background
+job that retries into a rate limit is how a convenience gets the foreground
+throttled.
+
+It refreshes what it has already seen and never discovers. A first run is still
+cold; the point is that the second week is not.
+
+### When GitHub's page moves
+
+The repo page will be restructured eventually, and today that failure would be
+silent: selectors return blanks, descriptions vanish, and the toolbar goes on
+saying everything is fine — because a dead selector and a repo with nothing
+filled in produce exactly the same record.
+
+So each parse records which **anchors** it could find, separately from what they
+said. If most of a run's pages come back without them, the toolbar says so:
+
+```
+76 repos · 1 shelf · 0 tagged · via repo pages · GitHub's repo page changed
+shape — shelving is unreliable: read 41 pages, found the About sidebar on 0
+```
+
+Below five pages read there is deliberately **no opinion** — at that sample a run
+of genuinely sparse repos is indistinguishable from a dead selector, and a canary
+that cries wolf is turned off within a week.
 
 ### The optional token
 
@@ -200,12 +294,19 @@ against a jsdom GitHub:
 | 9 | find | description, README, topic and language are all searchable |
 | 10 | note | written, painted, searchable — and survives a rescan |
 | 11 | vocabulary | families, suspicions, blanket labels and singletons, each drawn as what it is |
-| 12 | identity | a distinct hue and glyph per shelf, stable under any drawing order |
+| 12 | audit | gaps denominated per field per source; a finding filters to its own repos |
+| 13 | mark | the shelf's mark on a repo page, with its note, at zero requests |
+| 14 | mark degrades | no shelf map means no colour — never a wrong one |
+| 15 | warm | off by default, stalest first, bounded, stops on 429, never discovers |
+| 16 | canary | a moved selector is named; four pages is below the floor |
+| 17 | identity | a distinct hue and glyph per shelf, stable under any drawing order |
 
-Two things in there are **not** checkable without a browser, and both shipped
-wrong once: `tests/row-layout.html` measures the note margin against GitHub's
-real row, and `tests/identity.html` + `tests/glyph-probe.html` measure every
-palette slot for tofu and for contrast on both themes. Photograph them with
+Several things in there are **not** checkable without a browser, and every one
+of them shipped wrong once: `tests/row-layout.html` measures the note margin
+against GitHub's real row, `tests/identity.html` + `tests/glyph-probe.html`
+measure every palette slot for tofu and for contrast on both themes, and
+`tests/mark.html` measures the repo-page chip inside a real 296px sidebar —
+which is the only width at which a long shelf name can overflow. Photograph them with
 anything that renders a page; jsdom computes no layout and cannot tell a shape
 from the missing-glyph box.
 
@@ -237,8 +338,11 @@ shelves/
 │       ├── dom.js          route detection, list finding, page merging
 │       ├── facts.js        ONE parse of a repo page → ten fields
 │       ├── topics.js       the four-rung topic ladder
-│       ├── vocab.js        the topics as a system, and its panel
+│       ├── vocab.js        the topics as a system, and the panel kit
+│       ├── audit.js        the repos as a system: what is missing
 │       ├── view.js         bucketing, rendering, shelf identity
+│       ├── mark.js         route 2 — the mark on a repo's own page
+│       ├── warm.js         route 3 — the opt-in background top-up
 │       ├── main.js         lifecycle; one idempotent run()
 │       └── shelves.css     themed off GitHub's own CSS variables
 ├── tests/
@@ -285,3 +389,7 @@ lines in the code are load-bearing, and the charter is where the reasons live.
 | a note vanished | it was emptied; an empty note is deleted rather than stored blank. Nothing else removes one |
 | a shelf changed colour | you renamed it. The mark is a hash of the name, which is what lets it be the same on every machine with nothing stored |
 | two shelves look similar | they will still have different glyphs — the shape is the second channel and it never agrees with the wrong hue |
+| the chip on a repo page has no colour | you are auto-grouping and have not opened your Repositories tab yet — the colour depends on the whole shelf list, so it declines to guess one |
+| no chip at all on a repo page | only the repo's landing page carries the About sidebar it sits in; sub-pages (issues, code, a file) do not |
+| the audit says "not asked" | those repos were answered by the GitHub API, whose body does not carry that field. A rescan without a token reads the pages themselves |
+| the toolbar says GitHub's page changed shape | it probably has. `facts.js` owns every repo-page selector; nothing else needs looking at |

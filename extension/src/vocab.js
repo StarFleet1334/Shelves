@@ -194,23 +194,22 @@ globalThis.Shelves = globalThis.Shelves || {};
   }
 
   /**
-   * @param {object} v      what S.vocabulary() returned
-   * @param {object} opts   identity: Map(label -> {hue, glyph}) so a topic that
-   *                        is already a shelf wears the shelf's own mark;
-   *                        onPick(topic): what a click does — the panel itself
-   *                        knows nothing about the filter.
+   * THE PANEL'S FURNITURE, SHARED. The vocabulary reads the topics and the
+   * audit (audit.js) reads the repositories; they are two questions about one
+   * collection and belong under one press, so they are two SECTIONS of one
+   * panel rather than two buttons in a toolbar that already wraps. The kit is
+   * what keeps them looking like one thing: a finding is drawn identically
+   * whichever section made it, and neither file owns the panel.
+   *
+   * @param {object} opts  identity: Map(label -> mark) so a topic that is
+   *                       already a shelf wears that shelf's own mark;
+   *                       onPick(topic): filter by text;
+   *                       onRepos(names, label): filter to an explicit set.
+   *                       Neither section knows what a filter is.
    */
-  S.vocabPanel = function vocabPanel(v, opts) {
+  S.panelKit = function panelKit(opts) {
     const o = opts || {};
     const id = o.identity || new Map();
-    const wrap = el("div", "sh-vocab");
-
-    const head = el("div", "sh-v-head");
-    head.append(el("span", "sh-v-title", "vocabulary"));
-    head.append(el("span", "sh-v-sum",
-      v.repos + " repos · " + v.tagged + " tagged · " + v.untagged + " untagged · " +
-      v.terms.length + " topics"));
-    wrap.append(head);
 
     /* A TOPIC IS A BUTTON, and pressing it filters the page to the repos that
      * carry it. Reading that a label is broken is half of it; the other half is
@@ -234,6 +233,26 @@ globalThis.Shelves = globalThis.Shelves || {};
       return b;
     }
 
+    /* THE AUDIT'S BUTTON CANNOT BE THE TOPIC'S. "the 12 repos with no
+     * description" is not a substring anyone can type, so it addresses rows by
+     * NAME instead of by text — which is why applyFilter grew a second mode
+     * rather than this pretending a query exists. */
+    function pick(word, names, title, says) {
+      const b = el("button", "sh-term");
+      b.type = "button";
+      b.dataset.pick = "1";
+      b.title = title || ("show these " + names.length);
+      b.append(el("span", "sh-term-n", word));
+      b.append(el("span", "sh-term-c", String(names.length)));
+      /* THE WORD ON THE BUTTON IS NOT THE NAME OF THE SET. The button says
+       * SHOW because that is what pressing it does; the bar afterwards has to
+       * say "2 no README of 5", because by then the button is off screen and
+       * "2 show of 5" is not a sentence. Passing one string for both jobs read
+       * fine in the code and was nonsense on the page. */
+      b.addEventListener("click", () => o.onRepos && o.onRepos(names, says || word));
+      return b;
+    }
+
     function finding(kind, label, body) {
       const f = el("div", "sh-v-find");
       f.dataset.kind = kind;
@@ -243,6 +262,22 @@ globalThis.Shelves = globalThis.Shelves || {};
       f.append(rest);
       return f;
     }
+
+    return { el, term, pick, finding };
+  };
+
+  /**
+   * @param {object} v    what S.vocabulary() returned
+   * @param {object} kit  from S.panelKit()
+   * @returns {Node[]}    the TOPICS half of the panel
+   */
+  S.vocabSection = function vocabSection(v, kit) {
+    const { term, finding } = kit;
+    const out = [];
+
+    out.push(el("div", "sh-v-label", "topics"));
+    out.push(el("div", "sh-v-sub",
+      v.tagged + " of " + v.repos + " repos tagged · " + v.terms.length + " topics"));
 
     const found = el("div", "sh-v-finds");
 
@@ -280,25 +315,27 @@ globalThis.Shelves = globalThis.Shelves || {};
     }
 
     if (found.childNodes.length) {
-      wrap.append(el("div", "sh-v-label", "worth a look"));
-      wrap.append(found);
+      out.push(found);
     } else if (v.terms.length) {
-      wrap.append(el("div", "sh-v-clean",
+      out.push(el("div", "sh-v-clean",
         "No duplicate spellings, no blanket labels, nothing used only once. " +
         "This vocabulary is doing its job."));
     }
 
     if (v.terms.length) {
-      wrap.append(el("div", "sh-v-label", "every topic"));
+      /* Photographed: without this the full topic list butts straight up
+         against the last finding and reads as part of it — one more row of
+         evidence for a claim nobody made. */
+      out.push(el("div", "sh-v-mini", "every topic"));
       const all = el("div", "sh-v-all");
       v.terms.forEach((t) => all.append(term(t.topic, t.count)));
-      wrap.append(all);
+      out.push(all);
     } else {
-      wrap.append(el("div", "sh-v-clean",
+      out.push(el("div", "sh-v-clean",
         "No topics at all yet — nothing here has a vocabulary to show. " +
         "Topics are added on a repo's own page, under About."));
     }
 
-    return wrap;
+    return out;
   };
 })(globalThis.Shelves);

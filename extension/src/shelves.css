@@ -429,3 +429,128 @@
   color: var(--fgColor-muted, #8b949e);
   font-variant-numeric: tabular-nums;
 }
+
+/* ---- the audit panel's second half --------------------------------------
+   The repos section is drawn identically to the topics one, on purpose: they
+   are two questions about one collection and the reader should not have to
+   learn a second layout to read the second answer. */
+.sh-v-sub {
+  color: var(--fgColor-muted, #8b949e);
+  margin: 0 0 6px;
+}
+
+/* Lighter than a section label: it separates a list from the findings above
+   it without claiming to be a third section. */
+.sh-v-mini {
+  margin: 10px 0 5px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fgColor-muted, #8b949e);
+  opacity: 0.75;
+}
+
+/* A finding about a repository is a GAP, and gaps wear the attention colour
+   the same way an uncertain topic claim does — but archived is not a gap, it
+   is a fact, so it stays in the muted voice the rest of the panel speaks in. */
+.sh-v-find[data-kind="gap"] .sh-v-tag {
+  color: var(--fgColor-attention, #d29922);
+}
+
+/* P.IV, applied to an audit: what could NOT be asked, said quietly but said. */
+.sh-v-caveat {
+  margin-top: 8px;
+  padding-left: 8px;
+  border-left: 2px solid var(--borderColor-default, #30363d);
+  color: var(--fgColor-muted, #8b949e);
+}
+
+/* The audit's button addresses rows by name rather than by text, so it is not
+   a topic and must not look like one — no glyph, no hue, and a verb rather
+   than a noun on it. */
+.sh-term[data-pick="1"] {
+  border-style: dashed;
+}
+.sh-term[data-pick="1"] .sh-term-n {
+  color: var(--fgColor-muted, #8b949e);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+/* A moved sidebar means every shelf on the page is wrong, which is not a
+   footnote — the canary is the one warning here allowed to be loud. */
+.sh-canary {
+  font-weight: 600;
+}
+
+/* ---- the mark on a repo's own page --------------------------------------
+   THIS IS SOMEBODY ELSE'S PAGE. Everything above replaces a list the reader
+   came to see; this sits on a page they opened to read code, so it is sized
+   and coloured to be findable and never to compete — no background of its own
+   beyond the frame, and the shelf's colour carried by a rule and a glyph
+   exactly as the shelf itself carries it. */
+.sh-mark {
+  --sh-hue: 212;
+  --sh-sat: 48%;
+  --sh-lit: 50%;
+  margin: 0 0 16px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sh-mark-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 10px 2px 8px;
+  border-radius: 2em;
+  text-decoration: none;
+  border: 1px solid hsla(var(--sh-hue), var(--sh-sat), var(--sh-lit), 0.65);
+  border-left: 3px solid hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+  background: var(--bgColor-muted, #161b22);
+  color: var(--fgColor-default, #e6edf3);
+}
+.sh-mark-chip:hover {
+  text-decoration: none;
+  border-color: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+  background: var(--bgColor-neutral-muted, #21262d);
+}
+/* No shelf map to resolve the palette against: the chip still names the shelf
+   and simply declines to claim a colour. Wrong beats absent nowhere here. */
+.sh-mark-chip.sh-plain {
+  border-color: var(--borderColor-default, #30363d);
+  border-left-color: var(--borderColor-emphasis, #6e7681);
+}
+
+.sh-mark-g {
+  font-size: 10px;
+  color: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+}
+.sh-mark-n {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sh-mark-c {
+  color: var(--fgColor-muted, #8b949e);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The note reuses the row's marker wholesale, so it is edited identically in
+   both places — but here it is the only thing in a narrow column rather than a
+   line under a description, so it gets room and its own top rule. */
+.sh-mark .sh-margin {
+  margin: 8px 0 0;
+}
+/* An empty note's pencil stays invisible until the ROW is hovered, and there
+   is no row here: the rule that reveals it is scoped to `#shelves-host
+   li:hover`, which cannot match on a repo page. Left alone the affordance
+   would be permanently invisible and effectively unreachable. It also has to
+   out-specify `.sh-margin[data-has="0"] .sh-note-btn` at (0,3,0), which two
+   classes would not have done. */
+.sh-mark .sh-margin[data-has="0"] .sh-note-btn {
+  opacity: 1;
+}

@@ -11,6 +11,8 @@ const DEFAULTS = {
   otherLabel: "Ungrouped",
   startCollapsed: false,
   cacheDays: 7,
+  prewarm: false,
+  warmBatch: 6,
   concurrency: 6,
   fetchAllPages: true,
   maxPages: 10,
@@ -102,6 +104,9 @@ function load() {
     $("otherLabel").value = s.otherLabel || DEFAULTS.otherLabel;
     $("startCollapsed").checked = !!s.startCollapsed;
     $("cacheDays").value = Number(s.cacheDays) || DEFAULTS.cacheDays;
+    $("prewarm").checked = s.prewarm === true;   // anything else is off
+    const n = $("warmBatchN");
+    if (n) n.textContent = String(Number(s.warmBatch) || DEFAULTS.warmBatch);
     drawGroups();
   });
   chrome.storage.local.get({ token: "" }, (l) => {
@@ -127,6 +132,7 @@ function save() {
       otherLabel: $("otherLabel").value.trim() || DEFAULTS.otherLabel,
       startCollapsed: $("startCollapsed").checked,
       cacheDays: days,
+      prewarm: $("prewarm").checked,
     },
     () => {
       chrome.storage.local.set({ token: $("token").value.trim() }, () => {

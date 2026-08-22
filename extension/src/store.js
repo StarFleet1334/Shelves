@@ -22,11 +22,19 @@ globalThis.Shelves = globalThis.Shelves || {};
     concurrency: 6,        // repo-page fetches in flight
     fetchAllPages: true,
     maxPages: 10,
+    /* OFF, AND IT HAS TO BE. Everything else here spends a request the reader
+     * asked for by opening a page; the top-up spends requests on pages they
+     * opened for another reason entirely. That is a different kind of cost and
+     * it needs a different kind of consent (P.II), so it is opt-in and stays
+     * opt-in even though it is the single biggest improvement to a cold run. */
+    prewarm: false,
+    warmBatch: 6,          // repo pages per visit, at concurrency 1
   };
 
   const CACHE_KEY = "topicCache";   // what the fact cache used to be called
   const FACTS_KEY = "repoFacts";
   const NOTES_KEY = "notes";
+  const MAP_KEY = "shelfMap";
 
   const api = () =>
     (typeof chrome !== "undefined" && chrome && chrome.storage) ? chrome.storage : null;
@@ -77,6 +85,8 @@ globalThis.Shelves = globalThis.Shelves || {};
     s.cacheDays = Number(s.cacheDays) || DEFAULTS.cacheDays;
     s.concurrency = Math.max(1, Math.min(12, Number(s.concurrency) || DEFAULTS.concurrency));
     s.maxPages = Number(s.maxPages) || DEFAULTS.maxPages;
+    s.prewarm = s.prewarm === true;      // anything but an explicit true is off
+    s.warmBatch = Math.max(1, Math.min(20, Number(s.warmBatch) || DEFAULTS.warmBatch));
     return s;
   };
 
@@ -139,6 +149,38 @@ globalThis.Shelves = globalThis.Shelves || {};
       else delete notes[String(name || "").toLowerCase()];
       const ok = await this.write(notes);
       return { ok, notes };
+    },
+  };
+
+  /* ---- the shelf map: what the profile page worked out, left for the ----
+   * ---- pages that cannot work it out for themselves ---------------------
+   *
+   * { "<owner>": { at, order: [labels], counts: {label: n}, names: [...] } }
+   *
+   * A repo's OWN page can see its topics but not its neighbours', and the
+   * shelf a repo lands on — and, more sharply, the COLOUR that shelf wears —
+   * are both properties of the whole collection. `identity()` resolves palette
+   * collisions across every label at once, so a page that knows one label
+   * cannot reproduce the answer; it can only guess a different one, and a mark
+   * that disagrees with the shelves is worse than no mark.
+   *
+   * So the profile page writes down what it worked out and the repo page reads
+   * it. Derived, disposable and rebuilt on every render, exactly like the fact
+   * cache — losing it costs the chip its colour and nothing else.
+   */
+
+  S.shelfmap = {
+    async read(owner) {
+      const got = await get("local", { [MAP_KEY]: {} });
+      const all = got[MAP_KEY];
+      const m = all && typeof all === "object" ? all[String(owner || "").toLowerCase()] : null;
+      return m && typeof m === "object" ? m : null;
+    },
+    async write(owner, map) {
+      const got = await get("local", { [MAP_KEY]: {} });
+      const all = (got[MAP_KEY] && typeof got[MAP_KEY] === "object") ? got[MAP_KEY] : {};
+      all[String(owner || "").toLowerCase()] = { ...map, at: Date.now() };
+      return set("local", { [MAP_KEY]: all });
     },
   };
 

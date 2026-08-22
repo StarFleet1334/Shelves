@@ -42,7 +42,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         ? "reading topics from the API…"
         : "reading topics…";
 
-      const { topics, facts, source, warning } = await S.resolve(
+      const { topics, facts, source, warning, health } = await S.resolve(
         rows,
         names,
         settings,
@@ -58,7 +58,8 @@ globalThis.Shelves = globalThis.Shelves || {};
       const notes = await S.notes.read();
 
       const host = S.render({
-        rows, topics, facts, names, notes, settings, sourceUl, source, warning, owner,
+        rows, topics, facts, names, notes, settings, sourceUl, source, warning,
+        health, owner,
         handlers: {
           reload: () => location.reload(),
           rescan: async () => {
@@ -97,17 +98,56 @@ globalThis.Shelves = globalThis.Shelves || {};
     }
   }
 
-  const kick = () => setTimeout(run, 120);
+  /* ---- the other two routes -------------------------------------------- */
+  /* THREE SURFACES, ONE LIFECYCLE. Until the mark, this extension ran on
+   * exactly one page; the discipline that made that safe — everything funnels
+   * into an idempotent entry point, and every trigger calls it — is what makes
+   * three safe too. Each route guards itself on its own route test, so the
+   * kicks below can fire on any github.com page and at most one of them acts.
+   *
+   * The top-up is deliberately NOT kicked by turbo: it is bounded per page
+   * VISIT, and turbo fires on every in-page navigation, which would turn a
+   * budget of six into six per click. */
+  let marking = false;
+  async function mark() {
+    if (marking) return;
+    if (!S.isRepoPage()) return;
+    if (document.getElementById("shelves-mark")) return;
+    marking = true;
+    try {
+      await S.markRepoPage();
+    } catch (e) {
+      /* A missing chip must never cost the reader the repo page they actually
+       * came for (P.III). */
+      console.warn("[shelves]", e);
+    } finally {
+      marking = false;
+    }
+  }
+
+  const kick = () => {
+    setTimeout(run, 120);
+    setTimeout(mark, 160);
+  };
 
   kick();
   document.addEventListener("turbo:render", kick);
   document.addEventListener("turbo:load", kick);
   document.addEventListener("pjax:end", kick);
 
+  /* Once per load of a github.com page, and never on the profile tab — warm.js
+   * refuses there anyway, but saying it twice costs nothing and the second
+   * reader of this file should not have to open warm.js to learn it. */
+  if (!S.isRepoTab()) S.warmLater();
+
   /* MEASURED (charter §6): GitHub's own Type/Language filters replace the
    * list wholesale. The observer notices the new list; run() being idempotent
    * is what makes reacting to every mutation safe. */
   const observer = new MutationObserver(() => {
+    if (S.isRepoPage()) {
+      if (!document.getElementById("shelves-mark")) mark();
+      return;
+    }
     if (!S.isRepoTab()) return;
     if (document.getElementById(S.HOST_ID)) return;
     if (S.findList()) kick();
@@ -123,8 +163,12 @@ globalThis.Shelves = globalThis.Shelves || {};
    * reload there would restart the run it is the product of) and a note is
    * saved by the reader mid-page — reloading would throw away their scroll,
    * their open shelves and the search they were in the middle of typing, as
-   * the reward for writing one line about a repo. */
-  const QUIET = ["topicCache", "repoFacts", "notes"];
+   * the reward for writing one line about a repo.
+   *
+   * `shelfMap` joins them for a sharper reason: this page WRITES it on every
+   * render, so without the exemption every render would trigger a reload,
+   * which would render, which would write it again. */
+  const QUIET = ["topicCache", "repoFacts", "notes", "shelfMap"];
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "sync" && area !== "local") return;

@@ -1,0 +1,135 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>the mark on a repo page — real browser</title>
+<style>
+  /* GitHub's repo page, reduced to the parts that decide this chip's layout:
+     a narrow right-hand sidebar (296px at the real breakpoint) holding About,
+     the topics, and now the shelf mark above them. The width is the whole
+     test — a chip that reads fine at 900px and overflows at 296 is a chip
+     that has only ever been seen in the wrong place. */
+  .pane {
+    --bgColor-default:#0d1117; --bgColor-muted:#161b22;
+    --bgColor-neutral-muted:#21262d; --fgColor-default:#e6edf3;
+    --fgColor-muted:#8b949e; --borderColor-default:#30363d;
+    --borderColor-emphasis:#6e7681; --borderColor-accent-emphasis:#1f6feb;
+    --fgColor-attention:#d29922;
+    background: var(--bgColor-default);
+    color: var(--fgColor-default);
+    padding: 16px; flex: 1 1 0; min-width: 0;
+  }
+  .pane.light {
+    --bgColor-default:#ffffff; --bgColor-muted:#f6f8fa;
+    --bgColor-neutral-muted:#eff2f5; --fgColor-default:#1f2328;
+    --fgColor-muted:#59636e; --borderColor-default:#d1d9e0;
+    --borderColor-emphasis:#818b98; --borderColor-accent-emphasis:#0969da;
+    --fgColor-attention:#9a6700;
+  }
+  body { margin:0; display:flex; align-items:flex-start;
+         font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  .Layout-sidebar { width:296px; }
+  .Layout-sidebar h2 { font-size:16px; margin:0 0 8px; }
+  .Layout-sidebar p { margin:0 0 12px; color:var(--fgColor-default); }
+  .topic-tag { display:inline-block; font-size:12px; line-height:22px;
+    padding:0 10px; margin:0 4px 4px 0; border-radius:2em;
+    background:rgba(31,111,235,.15); color:#4493f8; text-decoration:none; }
+  .light .topic-tag { background:#ddf4ff; color:#0969da; }
+  .probe { font:600 11px/2 ui-monospace,monospace; color:var(--fgColor-muted);
+           letter-spacing:.08em; margin:0 0 8px; }
+  pre.out { color:#7ee787; font:11px/1.5 ui-monospace,monospace;
+            white-space:pre-wrap; margin:20px 0 0; }
+</style>
+<link rel="stylesheet" href="../extension/src/shelves.css">
+</head>
+<body>
+<div class="pane dark"><div class="probe">DARK · 296px sidebar</div><div id="dark"></div></div>
+<div class="pane light"><div class="probe">LIGHT · 296px sidebar</div><div id="light"></div></div>
+
+<script src="../extension/src/store.js"></script>
+<script src="../extension/src/dom.js"></script>
+<script src="../extension/src/facts.js"></script>
+<script src="../extension/src/vocab.js"></script>
+<script src="../extension/src/audit.js"></script>
+<script src="../extension/src/view.js"></script>
+<script src="../extension/src/mark.js"></script>
+<script>
+/* S.buildMark is the shipped builder, called exactly as mark.js calls it. The
+   surrounding sidebar is the fixture; the chip is not. */
+const S = globalThis.Shelves;
+const ORDER = ["aiproject", "tooling", "rag", "infra", "sketches", "archive",
+               "clients", "spikes", "datasets", "notebooks", "forks", "dotfiles",
+               "Ungrouped"];
+const MARKS = S.identity(ORDER, "Ungrouped");
+
+const CASES = [
+  { label: "rag", count: 7, note: "the one with the broken deploy" },
+  { label: "infra", count: 5, note: "" },
+  { label: "Ungrouped", count: 31, note: "no topics on this one yet" },
+  { label: "machine-learning-experiments", count: 2,
+    note: "a very long shelf name, in a 296px column, is the case that breaks" },
+];
+
+function sidebar(into) {
+  const side = document.createElement("div");
+  side.className = "Layout-sidebar";
+  CASES.forEach((c) => {
+    const box = S.buildMark({
+      owner: "octo",
+      label: c.label,
+      name: "octo/throttle-kit",
+      mark: MARKS.get(c.label),          // undefined for the long name: no map
+      count: c.count,
+      note: c.note,
+      handlers: { note: () => {} },
+    });
+    box.id = "";                          // four on one page, for the shot only
+    box.dataset.case = c.label;
+    side.append(box);
+  });
+
+  const h = document.createElement("h2");
+  h.textContent = "About";
+  const p = document.createElement("p");
+  p.textContent = "Token bucket rate limiting for flaky upstreams.";
+  side.append(h, p);
+  ["rag", "python", "rate-limiting"].forEach((t) => {
+    const a = document.createElement("a");
+    a.className = "topic-tag"; a.href = "/topics/" + t; a.textContent = t;
+    side.append(a);
+  });
+  into.append(side);
+  return side;
+}
+
+const dark = sidebar(document.getElementById("dark"));
+const light = sidebar(document.getElementById("light"));
+
+/* ---- the probe ---------------------------------------------------------
+   THE COLUMN IS 296px AND THE CHIP MUST NOT LEAVE IT. `overflow` on the chip
+   is the failure to watch for: a long shelf name with `white-space: nowrap`
+   will happily paint straight through a sidebar and over the page beside it,
+   and nothing in a screenshot of a SHORT name would ever show it. */
+const out = [];
+[["dark", dark], ["light", light]].forEach(([theme, side]) => {
+  const box = side.getBoundingClientRect();
+  side.querySelectorAll(".sh-mark").forEach((m) => {
+    const chip = m.querySelector(".sh-mark-chip");
+    const r = chip.getBoundingClientRect();
+    const over = Math.round(Math.max(0, r.right - box.right));
+    out.push(
+      theme.padEnd(6) + (m.dataset.case + "").padEnd(30) +
+      " chip=" + Math.round(r.width) + "px" +
+      " col=" + Math.round(box.width) + "px" +
+      " h=" + Math.round(m.getBoundingClientRect().height) +
+      (over ? "  OVERFLOWS BY " + over + "px!" : "  fits")
+    );
+  });
+});
+const pre = document.createElement("pre");
+pre.className = "out";
+pre.textContent = out.join("\n");
+document.querySelector(".pane.dark").append(pre);
+</script>
+</body>
+</html>

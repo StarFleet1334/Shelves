@@ -52,6 +52,11 @@ globalThis.Shelves = globalThis.Shelves || {};
     const found = new Map();
     const cache = await S.cache.read();
     const freshAfter = Date.now() - settings.cacheDays * 86400000;
+    /* Tallied over the pages actually READ this run, never over the cached
+     * ones. A warm cache would otherwise vote on the shape of markup nobody
+     * fetched today, and the canary would keep repeating last week's verdict
+     * long after the page it was about had changed again. */
+    const seen = { pages: 0, meta: 0, sidebar: 0, counter: 0, time: 0 };
 
     const todo = [];
     for (const name of names) {
@@ -74,6 +79,15 @@ globalThis.Shelves = globalThis.Shelves || {};
            * instead of dropped, for exactly the same one request. */
           const facts = S.factsFrom(doc, name);
           facts.at = Date.now();
+          /* The canary counts the ANCHORS this parse could find, then the
+           * evidence is dropped: `saw` is a fact about the parse, not about
+           * the repository, and caching it would mean a page read in March
+           * still voting on whether the markup is intact in August. */
+          seen.pages++;
+          Object.keys(seen).forEach((k) => {
+            if (k !== "pages" && facts.saw && facts.saw[k]) seen[k]++;
+          });
+          delete facts.saw;
           found.set(name, facts);
           cache[name] = facts;
         }
@@ -86,22 +100,25 @@ globalThis.Shelves = globalThis.Shelves || {};
 
     // Pay once, remember it (P.VIII).
     if (todo.length) await S.cache.write(cache);
-    return { found, fetched: todo.length };
+    return { found, fetched: todo.length, seen };
   }
 
   /**
-   * @returns {{topics: string[][], facts: object[], source: string, warning: string}}
+   * @returns {{topics: string[][], facts: object[], source: string,
+   *            warning: string, health: string}}
    *          both arrays are parallel to `rows`; a facts entry is never null,
    *          only empty, so no caller needs a guard for the difference.
+   *          `health` is the canary's sentence, or "" when nothing is wrong
+   *          and when too few pages were read to have an opinion.
    */
   S.resolve = async function resolve(rows, names, settings, onProgress) {
     let topics = rows.map((li) => S.topicsIn(li));
-    let facts = names.map((n, i) => ({ name: n, topics: topics[i] }));
+    let facts = names.map((n, i) => ({ name: n, topics: topics[i], via: "page-chips" }));
     const answered = () => topics.filter((t) => t.length).length;
 
     // Rung 1 — the page itself.
     if (answered() > 0) {
-      return { topics, facts, source: "page", warning: "" };
+      return { topics, facts, source: "page", warning: "", health: "" };
     }
 
     // Rungs 2 and 3 — the API, via the worker. One call answers everyone.
@@ -135,9 +152,11 @@ globalThis.Shelves = globalThis.Shelves || {};
     }
 
     // Rung 4 — whatever the API could not see. Private repos land here.
+    let health = "";
     const missing = names.filter((n, i) => n && !topics[i].length && !byName.has(n));
     if (missing.length) {
-      const { found, fetched } = await scrape(missing, settings, onProgress);
+      const { found, fetched, seen } = await scrape(missing, settings, onProgress);
+      health = S.pageHealth(seen);
       if (found.size) {
         facts = names.map((n, i) => (topics[i].length ? facts[i] : found.get(n) || facts[i]));
         topics = facts.map((f) => (f && f.topics) || []);
@@ -148,6 +167,6 @@ globalThis.Shelves = globalThis.Shelves || {};
       }
     }
 
-    return { topics, facts, source, warning };
+    return { topics, facts, source, warning, health };
   };
 })(globalThis.Shelves);

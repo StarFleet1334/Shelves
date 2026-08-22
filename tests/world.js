@@ -17,7 +17,8 @@ const { JSDOM } = require("jsdom");
 
 const EXT = path.join(__dirname, "..", "extension");
 const CONTENT = ["src/store.js", "src/dom.js", "src/facts.js", "src/topics.js",
-                 "src/vocab.js", "src/view.js", "src/main.js"];
+                 "src/vocab.js", "src/audit.js", "src/view.js", "src/mark.js",
+                 "src/warm.js", "src/main.js"];
 
 /* ---- fixtures ---------------------------------------------------------- */
 
@@ -75,19 +76,29 @@ function repoPage(repo, owner, name) {
   const metaDesc = desc
     ? `${desc}. Contribute to ${full} development by creating an account on GitHub.`
     : "";
+  /* `broken` is GitHub having moved on: the description meta gone and the
+     About panel no longer called `.Layout-sidebar`. Deliberately NOT a page
+     with nothing on it — the topics are still there, still findable through
+     the whole-document fallback, so the parse still returns something that
+     LOOKS right. That is the failure the canary exists for; a page that came
+     back empty would have been obvious without one. */
+  const sideClass = r.sidebarClass || (r.broken ? "AboutPanel" : "Layout-sidebar");
   return `<!doctype html><html><head>
-    ${metaDesc ? `<meta name="description" content="${metaDesc}">` : ""}
+    ${metaDesc && !r.broken ? `<meta name="description" content="${metaDesc}">` : ""}
   </head><body>
-    <div class="Layout-sidebar">
-      <h2>About</h2>
+    <div class="${sideClass}">
+      ${r.noAbout ? "" : "<h2>About</h2>"}
       ${topics.map(chip).join("")}
       ${r.homepage ? `<a href="${r.homepage}">${r.homepage}</a>` : ""}
       ${r.license ? `<a href="/${full}/blob/HEAD/LICENSE">${r.license} license</a>` : ""}
       ${r.language ? `<a href="/${full}/search?l=${encodeURIComponent(r.language)}">${r.language}</a>` : ""}
+      <h2>Releases</h2>
+      <h2>Languages</h2>
     </div>
     ${r.stars != null ? `<a id="repo-stars-counter-star" href="/${full}/stargazers" title="${r.stars}">${r.stars}</a>` : ""}
     ${r.forks != null ? `<a id="repo-network-counter" href="/${full}/forks" title="${r.forks}">${r.forks}</a>` : ""}
     ${r.updated ? `<relative-time datetime="${r.updated}">then</relative-time>` : ""}
+    ${r.archived ? `<div class="flash">This repository has been archived by the owner. It is now read-only.</div>` : ""}
     ${r.readme ? `<article class="markdown-body"><p>${r.readme}</p></article>` : ""}
     <div class="readme"><a href="/topics/decoy">decoy link outside the sidebar</a></div>
   </body></html>`;
@@ -166,6 +177,11 @@ function bootWorker(fetchImpl, counters) {
 /**
  * @param {object} opts
  *   owner       profile being viewed
+ *   at          "owner/name" to stand on a REPO PAGE instead of the profile
+ *               tab; `repos` then describes what exists on this fake GitHub
+ *               (what a fetch can resolve) rather than what is listed
+ *   page        the repo object rendered at `at`
+ *   shelfMap    seed for the map the profile page leaves behind
  *   repos       [{name, chips?, private?, topics?}] — page 1
  *   page2       [{...}] optional second page
  *   apiRepos    what the API answers with, or a number for an HTTP error
@@ -179,14 +195,26 @@ function build(opts) {
     sync: { ...(opts.settings || {}) },
     local: { token: opts.token || "", repoFacts: opts.cache || {},
              topicCache: opts.legacyCache || {},
+             shelfMap: opts.shelfMap || {},
              notes: opts.notes || {} },
   };
   const counters = { api: 0, lastAuth: false, pages: [], scraped: [] };
 
-  const html = profilePage(owner, opts.repos, opts.page2 ? "/" + owner + "?tab=repositories&page=2" : "");
+  /* TWO ROUTES, ONE WORLD. `at` stands the browser somewhere other than the
+     profile tab — a repo's own page, or anywhere else on github.com — which is
+     the only way to exercise the mark and the top-up at all. The content
+     scripts are the same six either way; which one acts is decided by the URL,
+     which is exactly the thing under test. */
+  const at = opts.at || null;                   // e.g. "octo/throttle-kit"
+  const url = at
+    ? `https://github.com/${at}`
+    : `https://github.com/${owner}?tab=repositories`;
+  const html = at
+    ? repoPage(opts.page || {}, at.split("/")[0], at.split("/")[1])
+    : profilePage(owner, opts.repos, opts.page2 ? "/" + owner + "?tab=repositories&page=2" : "");
 
   const dom = new JSDOM(html, {
-    url: `https://github.com/${owner}?tab=repositories`,
+    url,
     runScripts: "dangerously",
     pretendToBeVisual: true,
   });
@@ -285,6 +313,8 @@ function readShelves(win) {
         (li.querySelector(".sh-note-text") || {}).textContent || "",
       ])
     ),
+    canary: (host.querySelector(".sh-canary") || {}).textContent || "",
+    names: [...host.querySelectorAll("details li")].map((li) => li.dataset.shName || ""),
     hay: Object.fromEntries(
       [...host.querySelectorAll("details li")].map((li) => [
         (li.querySelector("h3 a") || {}).textContent,
@@ -294,12 +324,12 @@ function readShelves(win) {
   };
 }
 
-/** Press the toolbar's `vocabulary` button and read the panel back. */
+/** Press the toolbar's `audit` button and read both panel sections back. */
 function openVocab(win) {
   const btn = [...win.document.querySelectorAll("#shelves-host .sh-btn")].find((b) =>
-    /^vocabulary/.test(b.textContent)
+    /^audit/.test(b.textContent)
   );
-  if (!btn) throw new Error("no vocabulary button in the toolbar");
+  if (!btn) throw new Error("no audit button in the toolbar");
   const badge = btn.querySelector(".sh-vbadge");
   btn.click();
   const panel = win.document.querySelector("#shelves-host .sh-vocab");
@@ -307,6 +337,7 @@ function openVocab(win) {
     badge: badge ? Number(badge.textContent) : 0,
     open: !!panel && !panel.hidden,
     sum: root ? (root.querySelector(".sh-v-sum") || {}).textContent || "" : "",
+    sub: root ? (root.querySelector(".sh-v-sub") || {}).textContent || "" : "",
     /* A finding is its KIND and its whole sentence: the tests assert on which
        claim was made, never on where it happened to be rendered. */
     finds: root
@@ -324,10 +355,43 @@ function openVocab(win) {
           shelf: b.dataset.shelf === "1",
         }))
       : [],
+    caveat: root ? (root.querySelector(".sh-v-caveat") || {}).textContent || "" : "",
     panel,
     btn,
   });
   return read(panel);
+}
+
+/** Press an audit finding's SHOW button — the mode that addresses rows by
+ *  name, because "the 12 with no description" is not a query. */
+function pickGap(win, label) {
+  const f = [...win.document.querySelectorAll("#shelves-host .sh-v-find")].find(
+    (x) => ((x.querySelector(".sh-v-tag") || {}).textContent || "") === label
+  );
+  if (!f) throw new Error("no finding labelled " + label);
+  const b = f.querySelector('.sh-term[data-pick="1"]');
+  if (!b) throw new Error("finding " + label + " has no show button");
+  b.click();
+  return b;
+}
+
+/** Read the chip the repo page wears, or null. */
+function readMark(win) {
+  const box = win.document.getElementById("shelves-mark");
+  if (!box) return null;
+  const chip = box.querySelector(".sh-mark-chip");
+  return {
+    box,
+    label: (box.querySelector(".sh-mark-n") || {}).textContent || "",
+    glyph: (box.querySelector(".sh-mark-g") || {}).textContent || "",
+    count: (box.querySelector(".sh-mark-c") || {}).textContent || "",
+    href: chip ? chip.getAttribute("href") : "",
+    plain: !!(chip && chip.classList.contains("sh-plain")),
+    hue: (String(chip && chip.getAttribute("style") || "").match(/--sh-hue:\s*(\d+)/) || [])[1] || "",
+    note: (box.querySelector(".sh-note-text") || {}).textContent || "",
+    inSidebar: !!box.closest(".Layout-sidebar"),
+    count_: win.document.querySelectorAll("#shelves-mark").length,
+  };
 }
 
 /** Press a topic chip in the vocabulary panel, as a reader would. */
@@ -369,4 +433,4 @@ function writeNote(win, repoName, text) {
 const settle = (ms) => new Promise((r) => setTimeout(r, ms || 700));
 
 module.exports = { build, readShelves, settle, type, writeNote, openVocab,
-                   pickTerm, profilePage, repoPage };
+                   pickTerm, pickGap, readMark, profilePage, repoPage };

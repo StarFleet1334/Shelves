@@ -63,10 +63,12 @@ globalThis.Shelves = globalThis.Shelves || {};
   const BOILER = /[\s.]*(Contribute to .+? development by creating an account on GitHub\.?|Create an account on GitHub.*)$/i;
 
   S.factsFrom = function factsFrom(doc, fullName) {
-    const sidebar =
-      doc.querySelector('.Layout-sidebar, [data-testid="repository-sidebar"]') || doc;
+    const nest =
+      doc.querySelector('.Layout-sidebar, [data-testid="repository-sidebar"]');
+    const sidebar = nest || doc;
     const f = {
       name: String(fullName || "").toLowerCase(),
+      via: "page",
       topics: S.topicsIn(sidebar),          // measured (charter §7)
       description: description(doc),
       language: language(doc, sidebar),
@@ -79,7 +81,59 @@ globalThis.Shelves = globalThis.Shelves || {};
       archived: archived(doc),
       fork: isFork(doc),
     };
+
+    /* ---- the canary ------------------------------------------------------
+     * WHICH ANCHORS WERE THERE AT ALL, as opposed to what they said. The two
+     * are different questions and only the first can catch the failure this
+     * file is guaranteed to meet eventually (measurement 6: GitHub will
+     * restructure). A dead selector and a repo with nothing filled in produce
+     * the SAME record — every field blank — so a reader watching values can
+     * never tell "you have 76 untagged repos" from "the sidebar moved and
+     * SHELVES is now shelving nothing correctly".
+     *
+     * `meta` is the sharpest of the four because GitHub ships a description
+     * meta on every repo page it serves, INCLUDING repos with no About text
+     * (it falls back to "Contribute to o/n development…"). So a missing raw
+     * meta is close to proof that the parse, not the repo, is the empty one —
+     * which is why it is recorded before the boilerplate is stripped.
+     *
+     * This never leaves the run: topics.js tallies it and drops it before the
+     * record is cached, because it is a fact about this parse and not about
+     * the repository. */
+    f.saw = {
+      meta: !!(meta(doc, "description") || meta(doc, "og:description")),
+      sidebar: !!nest,
+      counter: !!doc.querySelector('#repo-stars-counter-star, a[href$="/stargazers"]'),
+      time: !!doc.querySelector("relative-time[datetime], time[datetime]"),
+    };
     return f;
+  };
+
+  /**
+   * Was this page the shape we know how to read? Counts the anchors seen
+   * across a run of scrapes and answers with a sentence, or "" for fine.
+   *
+   * FIVE PAGES IS THE FLOOR, and it is not arbitrary: below that a run of
+   * genuinely sparse repos is indistinguishable from a broken selector, and a
+   * canary that cries on a sample of two would be turned off within a week —
+   * at which point it is worth less than no canary at all. Half is the line
+   * because GitHub rolls markup out gradually; a real change shows up as most
+   * pages failing, never as one.
+   */
+  S.pageHealth = function pageHealth(seen) {
+    const n = seen && seen.pages ? seen.pages : 0;
+    if (n < 5) return "";
+    const short = [];
+    if (seen.meta / n < 0.5) short.push("a description on " + seen.meta);
+    if (seen.sidebar / n < 0.5) short.push("the About sidebar on " + seen.sidebar);
+    if (!short.length) return "";
+    /* The sidebar is the one that matters: topics live in it, and topics are
+       the whole product. A missing description costs a search term; a missing
+       sidebar means every shelf on this page is wrong. */
+    const grave = seen.sidebar / n < 0.5;
+    return (grave ? "GitHub's repo page changed shape — shelving is unreliable"
+                  : "GitHub's repo page may have changed shape") +
+           ": read " + n + " pages, found " + short.join(" and ") + " (see facts.js)";
   };
 
   /* The <meta> is the same string GitHub gives Google and is far steadier than
@@ -186,6 +240,13 @@ globalThis.Shelves = globalThis.Shelves || {};
   S.factsFromApi = function factsFromApi(row) {
     return {
       name: String(row.full_name || "").toLowerCase(),
+      /* WHICH SOURCE ANSWERED, kept on the record. Not bookkeeping: the API
+       * body carries no README, so "this repo has no README" and "this record
+       * came from a source that could not have one" are different statements,
+       * and an audit that cannot tell them apart reports a gap on every repo
+       * the API answered. A field is absent for two reasons and only one of
+       * them is the repository's fault. */
+      via: "api",
       topics: Array.isArray(row.topics) ? row.topics.map((t) => String(t).toLowerCase()) : [],
       description: String(row.description || "").slice(0, 300),
       language: String(row.language || ""),
