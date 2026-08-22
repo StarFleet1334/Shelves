@@ -17,7 +17,7 @@ const { JSDOM } = require("jsdom");
 
 const EXT = path.join(__dirname, "..", "extension");
 const CONTENT = ["src/store.js", "src/dom.js", "src/facts.js", "src/topics.js",
-                 "src/view.js", "src/main.js"];
+                 "src/vocab.js", "src/view.js", "src/main.js"];
 
 /* ---- fixtures ---------------------------------------------------------- */
 
@@ -264,6 +264,12 @@ function readShelves(win) {
       label: d.querySelector(".sh-name").textContent,
       count: Number(d.querySelector(".sh-count").textContent),
       repos: [...d.querySelectorAll("li h3 a")].map((a) => a.textContent),
+      glyph: (d.querySelector(".sh-glyph") || {}).textContent || "",
+      /* READ OFF THE STYLE ATTRIBUTE, not off `d.style`. jsdom's CSS object
+         model has not always carried custom properties, and a getter that
+         quietly answers "" would turn a real palette bug into a green test. */
+      hue: (String(d.getAttribute("style") || "").match(/--sh-hue:\s*(\d+)/) || [])[1] || "",
+      plain: d.classList.contains("sh-plain"),
     })),
     hostCount: win.document.querySelectorAll("#shelves-host").length,
     nested: !!host.querySelector("#shelves-host, .sh-shelf .sh-shelf"),
@@ -286,6 +292,52 @@ function readShelves(win) {
       ])
     ),
   };
+}
+
+/** Press the toolbar's `vocabulary` button and read the panel back. */
+function openVocab(win) {
+  const btn = [...win.document.querySelectorAll("#shelves-host .sh-btn")].find((b) =>
+    /^vocabulary/.test(b.textContent)
+  );
+  if (!btn) throw new Error("no vocabulary button in the toolbar");
+  const badge = btn.querySelector(".sh-vbadge");
+  btn.click();
+  const panel = win.document.querySelector("#shelves-host .sh-vocab");
+  const read = (root) => ({
+    badge: badge ? Number(badge.textContent) : 0,
+    open: !!panel && !panel.hidden,
+    sum: root ? (root.querySelector(".sh-v-sum") || {}).textContent || "" : "",
+    /* A finding is its KIND and its whole sentence: the tests assert on which
+       claim was made, never on where it happened to be rendered. */
+    finds: root
+      ? [...root.querySelectorAll(".sh-v-find")].map((f) => ({
+          kind: f.dataset.kind,
+          tag: (f.querySelector(".sh-v-tag") || {}).textContent || "",
+          text: String(f.textContent || "").replace(/\s+/g, " ").trim(),
+          terms: [...f.querySelectorAll(".sh-term .sh-term-n")].map((t) => t.textContent),
+        }))
+      : [],
+    terms: root
+      ? [...root.querySelectorAll(".sh-v-all .sh-term")].map((b) => ({
+          topic: (b.querySelector(".sh-term-n") || {}).textContent || "",
+          count: Number((b.querySelector(".sh-term-c") || {}).textContent || 0),
+          shelf: b.dataset.shelf === "1",
+        }))
+      : [],
+    panel,
+    btn,
+  });
+  return read(panel);
+}
+
+/** Press a topic chip in the vocabulary panel, as a reader would. */
+function pickTerm(win, topic) {
+  const b = [...win.document.querySelectorAll("#shelves-host .sh-vocab .sh-term")].find(
+    (x) => ((x.querySelector(".sh-term-n") || {}).textContent || "") === topic
+  );
+  if (!b) throw new Error("no chip for topic " + topic);
+  b.click();
+  return b;
 }
 
 /** Type into the toolbar's filter the way a person does. */
@@ -316,4 +368,5 @@ function writeNote(win, repoName, text) {
 
 const settle = (ms) => new Promise((r) => setTimeout(r, ms || 700));
 
-module.exports = { build, readShelves, settle, type, writeNote, profilePage, repoPage };
+module.exports = { build, readShelves, settle, type, writeNote, openVocab,
+                   pickTerm, profilePage, repoPage };

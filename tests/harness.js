@@ -11,7 +11,8 @@
  */
 "use strict";
 
-const { build, readShelves, settle, type, writeNote } = require("./world");
+const { build, readShelves, settle, type, writeNote, openVocab, pickTerm } =
+  require("./world");
 
 let failures = 0;
 const results = [];
@@ -419,6 +420,177 @@ const SCENARIOS = [
     assert(ctx, !("octo/throttle-kit" in (w.store.local.notes || {})),
       "an emptied note is deleted, not kept as an empty string");
     ctx.info = "written, painted, searchable, survives rescan";
+  }),
+
+  check("vocabulary - the tag system, read as a system", async (ctx) => {
+    /* Every finding the panel can make, in one small collection:
+         project      on 5 of 6 tagged repos      -> a blanket label
+         ai-project / aiproject                   -> one idea, two spellings
+         ai                                       -> a word inside ai-project
+         kubernetes / kubernets                   -> one character apart
+       and four topics used exactly once. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["ai-project", "kubernetes"] },
+      apiRepos: [],
+      repos: [
+        { name: "alpha", topics: ["project", "ai-project"] },
+        { name: "beta", topics: ["project", "ai-project"] },
+        { name: "gamma", topics: ["project", "aiproject"] },
+        { name: "delta", topics: ["project", "ai"] },
+        { name: "epsilon", topics: ["project", "kubernetes"] },
+        { name: "zeta", topics: ["kubernets"] },
+      ],
+    });
+    await settle(1200);
+    let v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+
+    const p = openVocab(w.win);
+    assert(ctx, p.open, "the vocabulary button must open the panel");
+    if (!p.open) return;
+
+    /* THE BADGE IS THE POINT. A panel nobody opens tells nobody anything, and
+       the premise is that these problems are invisible - so the count has to be
+       on the CLOSED button. 1 family + 3 suspicions + 1 blanket + 1 habit. */
+    assert(ctx, p.badge === 6, "the toolbar must badge 6 findings, got " + p.badge);
+    assert(ctx, /6 repos/.test(p.sum) && /6 tagged/.test(p.sum) && /6 topics/.test(p.sum),
+      "the panel counts its own subject, got: " + p.sum);
+
+    const kinds = (k) => p.finds.filter((f) => f.kind === k);
+
+    const fams = kinds("family");
+    assert(ctx, fams.length === 1, "one family, got " + fams.length);
+    assert(ctx, fams[0] && fams[0].terms.join() === "ai-project,aiproject",
+      "the family is the two spellings, got: " + (fams[0] || {}).terms);
+    /* THE REPO COUNT IS A UNION, NOT A SUM. Two spellings across three repos is
+       three; saying four would turn a labelling problem into a bigger
+       collection, which is the opposite of what the panel is for. */
+    assert(ctx, fams[0] && /across 3 repos/.test(fams[0].text),
+      "spellings are counted as a union of repos, got: " + (fams[0] || {}).text);
+
+    const blanket = kinds("blanket");
+    assert(ctx, blanket.length === 1 && blanket[0].terms.join() === "project",
+      "'project' is on almost everything and must be named, got: " +
+      JSON.stringify(blanket.map((b) => b.terms)));
+    assert(ctx, /5 of 6/.test(blanket[0] ? blanket[0].text : ""),
+      "and its share is stated, got: " + (blanket[0] || {}).text);
+
+    /* A GUESS IS DRAWN AS A GUESS. Same letters is arithmetic and becomes a
+       family; "looks related" is this panel's opinion and stays a suspicion,
+       never merged into anything. */
+    const typo = kinds("typo");
+    assert(ctx, typo.length === 1 && typo[0].terms.slice().sort().join() ===
+      "kubernetes,kubernets",
+      "a one-character difference is offered as a typo, got: " +
+      JSON.stringify(typo.map((t) => t.terms)));
+    const narrow = kinds("narrower").map((n) => n.terms.join());
+    assert(ctx, narrow.indexOf("ai,ai-project") !== -1,
+      "'ai' is a whole word inside 'ai-project', got: " + JSON.stringify(narrow));
+
+    const once = kinds("once");
+    assert(ctx, once.length === 1 && /4 used once/.test(once[0].tag),
+      "four topics used once, counted as ONE habit, got: " +
+      JSON.stringify(once.map((o) => o.tag)));
+
+    assert(ctx, p.terms.length === 6, "every topic is listed, got " + p.terms.length);
+    const chip = Object.fromEntries(p.terms.map((t) => [t.topic, t]));
+    assert(ctx, chip.project && chip.project.count === 5, "with its repo count");
+    assert(ctx, chip["ai-project"] && chip["ai-project"].shelf === true,
+      "a topic that is already a shelf wears that shelf's own mark");
+    assert(ctx, chip.project && chip.project.shelf === false,
+      "and one that is not, does not");
+
+    /* Reading that a label is broken is half of it; seeing WHICH repos wear it
+       is the other half, and it is one press away. */
+    pickTerm(w.win, "aiproject");
+    v = readShelves(w.win);
+    assert(ctx, v.visible.join() === "gamma",
+      "pressing a topic filters the page to its repos, got: " + v.visible.join());
+
+    ctx.info = p.badge + " findings over " + p.terms.length + " topics";
+  }),
+
+  check("identity - a colour and a glyph per shelf, derived and stable", async (ctx) => {
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["aiproject", "tooling", "rag"] },
+      repos: [
+        { name: "agent", chips: ["aiproject"] },
+        { name: "wisp", chips: ["tooling"] },
+        { name: "retrieve", chips: ["rag"] },
+        { name: "notes", chips: [] },
+      ],
+    });
+    await settle();
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+
+    const named = v.shelves.filter((s) => s.label !== "Ungrouped");
+    assert(ctx, named.length === 3, "three named shelves, got " + named.length);
+    assert(ctx, named.every((s) => s.glyph && !s.plain && /^\d+$/.test(s.hue)),
+      "every named shelf carries a glyph and a hue, got: " +
+      JSON.stringify(named.map((s) => [s.label, s.glyph, s.hue])));
+    assert(ctx, new Set(named.map((s) => s.glyph)).size === 3,
+      "and no two share a glyph, got: " + named.map((s) => s.glyph).join());
+    assert(ctx, new Set(named.map((s) => s.hue)).size === 3,
+      "or a hue, got: " + named.map((s) => s.hue).join());
+
+    /* The leftovers shelf is a remainder, not an idea. A colour of its own
+       would claim it was one. */
+    const other = v.shelves.find((s) => s.label === "Ungrouped");
+    assert(ctx, other && other.plain && other.hue === "",
+      "Ungrouped stays outside the palette, got: " + JSON.stringify(other));
+
+    const ID = w.win.Shelves.identity;
+
+    /* THE PROPERTY THAT MAKES IT WORTH HAVING. Auto-grouping sorts shelves by
+       size, so resolving collisions in DRAWING order would repaint a shelf
+       whenever a repo moved between two others - and a map that changes under
+       you is worse than a map with no colours at all. Same labels, any order,
+       same answer. */
+    const a = ID(["tooling", "aiproject", "rag", "Ungrouped"], "Ungrouped");
+    const b = ID(["rag", "Ungrouped", "tooling", "aiproject"], "Ungrouped");
+    assert(ctx, ["tooling", "aiproject", "rag"].every(
+      (k) => a.get(k).slot === b.get(k).slot && a.get(k).glyph === b.get(k).glyph
+    ), "identity must not depend on the order the shelves are drawn in");
+
+    /* ...and the page agrees with the function, so the stability proved above
+       is the stability the reader actually gets. */
+    assert(ctx, named.every((s) => a.get(s.label).glyph === s.glyph &&
+      String(a.get(s.label).hue) === s.hue),
+      "the rendered shelf must wear the identity the function assigns");
+
+    /* A HASH ALONE IS NOT ENOUGH: twelve labels into twelve slots collide
+       almost every time, so this fails outright without the walk to the next
+       free slot. */
+    const m12 = ID("abcdefghijkl".split(""), "Ungrouped");
+    const slots12 = new Set([...m12.values()].map((x) => x.slot)).size;
+    assert(ctx, slots12 === 12,
+      "twelve shelves must get twelve distinct slots, got " + slots12);
+
+    /* Past the palette, colours repeat rather than run out - and the two
+       channels must still agree, so either one alone identifies a shelf for a
+       reader who cannot use the other. */
+    const m20 = ID("abcdefghijklmnopqrst".split(""), "Ungrouped");
+    assert(ctx, m20.size === 20, "every shelf gets an identity, got " + m20.size);
+    const pair = new Map();
+    let agree = true;
+    m20.forEach((x) => {
+      if (pair.has(x.hue) && pair.get(x.hue) !== x.glyph) agree = false;
+      pair.set(x.hue, x.glyph);
+    });
+    assert(ctx, agree, "a hue and its glyph must never disagree");
+
+    /* Derived, never stored: none of this may have reached the disk. */
+    const wrote = Object.keys(w.store.local || {}).concat(Object.keys(w.store.sync || {}));
+    assert(ctx, wrote.indexOf("shelfColors") === -1 && wrote.indexOf("identity") === -1,
+      "identity is a hash of the name, not a stored preference");
+
+    ctx.info = named.map((s) => s.glyph + " " + s.label).join("   ") +
+      "   " + other.glyph + " Ungrouped";
   }),
 ];
 

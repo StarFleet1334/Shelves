@@ -248,3 +248,184 @@
   background: var(--bgColor-default, #0d1117);
   color: var(--fgColor-default, #e6edf3);
 }
+
+/* ---- shelf identity: a colour and a glyph -------------------------------
+   Two channels, one slot. view.js hashes the shelf's NAME into a hue and a
+   shape and hands the hue over as a custom property; everything below is
+   derived from that one number, so the rule and the glyph cannot drift apart
+   and a theme change costs no re-render.
+
+   THREE NUMBERS AND NOT ONE COLOUR, because the same slot has to be a solid
+   4px rule, a 45%-alpha border and a 65%-alpha chip outline, and three literals
+   is three chances for them to drift apart. view.js solves each hue for its own
+   lightness (see the palette there): at a fixed lightness, blue measured 3.3:1
+   on the dark theme while yellow measured 2.2:1 on the light one, because
+   luminance is not a function of hue. */
+.sh-shelf {
+  --sh-hue: 212;
+  --sh-sat: 48%;
+  --sh-lit: 50%;
+  border-left-width: 4px;
+  border-left-color: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+}
+/* The leftovers shelf is a remainder, not an idea. It gets the frame colour
+   every other border on the page already uses, so it reads as the absence of
+   an identity rather than as a thirteenth one. */
+.sh-shelf.sh-plain {
+  border-left-color: var(--borderColor-default, #30363d);
+}
+.sh-shelf[open] > .sh-sum {
+  border-bottom-color: hsla(var(--sh-hue), var(--sh-sat), var(--sh-lit), 0.45);
+}
+.sh-shelf.sh-plain[open] > .sh-sum {
+  border-bottom-color: var(--borderColor-default, #30363d);
+}
+
+.sh-glyph {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  /* the glyphs are not all the same optical size; a fixed box stops the shelf
+     names from stepping left and right down the page */
+  width: 12px;
+  text-align: center;
+  color: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+}
+.sh-shelf.sh-plain .sh-glyph {
+  color: var(--fgColor-muted, #8b949e);
+}
+
+/* ---- the vocabulary panel -----------------------------------------------
+   The one instrument here that is about the TOPICS rather than the repos. It
+   sits under the toolbar, in the same frame language as a shelf, because it is
+   read in the same glance and acted on in the same place. */
+.sh-vbadge {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 2em;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  color: var(--bgColor-default, #0d1117);
+  background: var(--fgColor-attention, #d29922);
+}
+.sh-btn[data-on="1"] {
+  border-color: var(--borderColor-accent-emphasis, #1f6feb);
+}
+
+.sh-vocab {
+  border: 1px solid var(--borderColor-default, #30363d);
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+  margin: 0 0 12px;
+  background: var(--bgColor-muted, #161b22);
+  font-size: 12px;
+  line-height: 18px;
+}
+.sh-vocab[hidden] { display: none; }
+
+.sh-v-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sh-v-title {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+.sh-v-sum {
+  margin-left: auto;
+  color: var(--fgColor-muted, #8b949e);
+}
+
+.sh-v-label {
+  margin: 12px 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fgColor-muted, #8b949e);
+  border-top: 1px solid var(--borderColor-default, #30363d);
+  padding-top: 8px;
+}
+
+.sh-v-find {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+/* THE TAG SAYS WHICH KIND OF CLAIM THIS IS, and the colours are not
+   decoration: a family is arithmetic (same letters) and is stated in the
+   page's own foreground, while a typo or a narrower word is this file's guess
+   and wears the attention colour that every other uncertain thing here wears.
+   The reader can tell what is measured from what is suspected without reading
+   a word of it. */
+.sh-v-tag {
+  flex: none;
+  min-width: 82px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fgColor-muted, #8b949e);
+  text-align: right;
+}
+.sh-v-find[data-kind="typo"] .sh-v-tag,
+.sh-v-find[data-kind="narrower"] .sh-v-tag,
+.sh-v-find[data-kind="blanket"] .sh-v-tag {
+  color: var(--fgColor-attention, #d29922);
+}
+.sh-v-body {
+  color: var(--fgColor-muted, #8b949e);
+}
+
+.sh-v-clean {
+  color: var(--fgColor-muted, #8b949e);
+  padding: 6px 0 2px;
+}
+
+.sh-v-all {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 168px;
+  overflow-y: auto;
+}
+
+/* A topic is a button because reading that a label is broken is only half of
+   it; the other half is seeing which repos are wearing it, which is one press
+   away and was a search nobody could previously express. */
+.sh-term {
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: 2em;
+  cursor: pointer;
+  border: 1px solid var(--borderColor-default, #30363d);
+  background: var(--bgColor-default, #0d1117);
+  color: var(--fgColor-default, #e6edf3);
+}
+.sh-term:hover {
+  border-color: var(--borderColor-emphasis, #6e7681);
+}
+/* A topic that is ALREADY a shelf wears that shelf's own mark, so the panel
+   and the page below it are visibly the same map. */
+.sh-term[data-shelf="1"] {
+  --sh-hue: 212; --sh-sat: 48%; --sh-lit: 50%;
+  border-color: hsla(var(--sh-hue), var(--sh-sat), var(--sh-lit), 0.65);
+}
+.sh-term-g {
+  font-size: 9px;
+  color: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+}
+.sh-term-c {
+  color: var(--fgColor-muted, #8b949e);
+  font-variant-numeric: tabular-nums;
+}

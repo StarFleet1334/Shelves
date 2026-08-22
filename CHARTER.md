@@ -196,6 +196,31 @@ the harness before the code.** Two of the prototype's "failures" were a faulty
 regex in the test stub — `/page=(\d+)/` cheerfully matching `per_page=100` — and
 not defects in what was under test.
 
+### XII. An identity may be derived, and then it costs nothing to keep
+
+A shelf's colour and glyph are a hash of the shelf's own **name**. Nothing is
+stored, nothing syncs, nothing migrates, and nothing can be lost — the same
+shelf is the same colour on every machine, on every load, forever, because the
+name is the only input. Principle I says the extension's state must be
+derived, disposable and reconstructible; this is the one place where obeying it
+made the feature *better* rather than merely cheaper, and it is worth stating
+so the next person does not reach for a settings key.
+
+Two things it costs, both accepted deliberately:
+
+- **The owner cannot choose a shelf's colour.** A picker would need a store,
+  and a store needs a migration, a default, and an answer for a renamed shelf.
+  A name that produces its own colour has none of those, and nobody has ever
+  needed a *particular* colour — only a consistent one.
+- **A renamed shelf is a new colour.** That is the honest failure: the name IS
+  the identity, so changing it changes the mark. It is also the rare case, and
+  it fails visibly rather than silently.
+
+Twelve slots, and collisions resolve by walking to the next free one **in
+alphabetical order** — never in the order the shelves are drawn, because
+auto-grouping sorts shelves by size and a colour that repainted whenever a repo
+moved would be worse than no colour at all.
+
 ---
 
 ## Architecture
@@ -222,9 +247,14 @@ not defects in what was under test.
       │              │
       │              └── chrome.runtime.sendMessage ──┐
       │                                               │
+   vocab.js ── the topics as a SYSTEM: families · typos · blanket labels ·
+      │         the ones used once — pure analysis   │ over what the ladder
+      │         already resolved, plus its own panel  │
+      │                                               │
    view.js ─── bucket · order · build <details> · toolbar · the filter ·
-      │        one row's private margin · themed off  │
-      │        GitHub's own CSS variables             │
+      │        one row's private margin · a hue and a │
+      │        glyph per shelf · themed off GitHub's  │
+      │        own CSS variables                      │
       │                                               │
    main.js ── lifecycle: load, turbo:*, MutationObserver, storage changes
                                                       │
@@ -244,7 +274,7 @@ not defects in what was under test.
                     └──────────────────────────────────────────┘
 ```
 
-Six content scripts rather than one file, sharing `globalThis.Shelves`. They
+Seven content scripts rather than one file, sharing `globalThis.Shelves`. They
 load in declared order and each does one job, which is what lets the harness
 drive `topics.js` against a stub without a browser anywhere in sight.
 

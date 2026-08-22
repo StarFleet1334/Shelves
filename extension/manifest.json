@@ -16,6 +16,7 @@
         "src/dom.js",
         "src/facts.js",
         "src/topics.js",
+        "src/vocab.js",
         "src/view.js",
         "src/main.js"
       ],

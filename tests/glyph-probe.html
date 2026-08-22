@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>glyph probe</title>
+<style>
+  body { background:#0d1117; color:#e6edf3; margin:0; padding:16px;
+         font:12px/1.6 ui-monospace,monospace; }
+  h1 { font-size:12px; letter-spacing:.08em; color:#8b949e; margin:0 0 10px; }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:2px 18px; }
+  .ok { color:#7ee787; } .no { color:#ff7b72; }
+  .big { font:22px/1 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+</style></head><body>
+<h1>WHICH SHAPES ACTUALLY RENDER IN GITHUB'S FONT STACK</h1>
+<div class="grid" id="g"></div>
+<script>
+/* A glyph the font lacks renders as the missing-glyph box, which at 10px looks
+   enough like a hollow square marker to pass a human's inspection — that is
+   exactly how the first palette shipped a tofu. U+FFFF is guaranteed to have
+   no glyph anywhere, so equal width IS the missing box. */
+const FONT = '10px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif';
+function w(ch) {
+  const s = document.createElement("span");
+  s.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font:" + FONT;
+  s.textContent = ch;
+  document.body.append(s);
+  const x = s.getBoundingClientRect().width;
+  s.remove();
+  return x;
+}
+const missing = w("￿");
+const CANDIDATES = ("●◆■▲▼★○◇△▽☆□◐◑◈✦✚✱⬢⬟▰◗◖⬥❖⧫⬦▪▫◘◙⬛⬜▮▯⯃⯄" +
+                   "◉◎⊙⊚⌾✧✥✤♦♣♠♥⬧⬨⬩").split("");
+const g = document.getElementById("g");
+const good = [];
+CANDIDATES.forEach((ch) => {
+  const x = w(ch);
+  const tofu = Math.abs(x - missing) < 0.5;
+  if (!tofu) good.push(ch);
+  const d = document.createElement("div");
+  d.className = tofu ? "no" : "ok";
+  d.innerHTML = '<span class="big">' + ch + "</span> U+" +
+    ch.codePointAt(0).toString(16).toUpperCase().padStart(4, "0") +
+    " w=" + x.toFixed(1) + (tofu ? " TOFU" : "");
+  g.append(d);
+});
+const out = document.createElement("pre");
+out.style.cssText = "color:#7ee787;grid-column:1/-1;white-space:pre-wrap;margin-top:14px";
+out.textContent = "missing-glyph width = " + missing.toFixed(1) +
+  "\nrenders (" + good.length + "): " + good.join(" ");
+g.append(out);
+</script>
+</body></html>

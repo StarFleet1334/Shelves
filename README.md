@@ -6,15 +6,19 @@ Group your GitHub repositories by topic, in the page you already open.
 three filters, no folders. SHELVES re-draws it as named, counted, collapsible
 shelves built from the **topics** you already put on your repos.
 
-Then it does two things the page cannot. `/` searches your repositories by
+Then it does things the page cannot. `/` searches your repositories by
 **description, topic, language, licence and README** — not just by name, which
-is all GitHub's own box can match. And every row carries a **private note**,
-kept in your browser, that nothing on GitHub offers anywhere.
+is all GitHub's own box can match. Every row carries a **private note**, kept in
+your browser, that nothing on GitHub offers anywhere. Every shelf wears a
+**colour and a glyph** so you find one by recognising it rather than by reading.
+And **vocabulary** shows you your own topics as a system — which of them are
+three spellings of one idea, which are on everything and therefore group
+nothing, and which were used once and never again.
 
 It is a lens, not an editor. It never writes to your GitHub account.
 
 ```
-┌ expand all · collapse all · flat list · rescan · [find  /]  2 of 76 ─── 76 repos · 4 shelves · 31 tagged · via repo pages ┐
+┌ expand all · collapse all · flat list · rescan · vocabulary 4 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via repo pages ┐
 
 ▾ aiproject                                                                                         12
     chat-agent          Python  ★2   Updated 2 days ago      Private
@@ -97,6 +101,59 @@ charter states as the single exception to principle I.
 
 Press **Save**. The GitHub tab reloads itself.
 
+### Shelf identity — a colour and a glyph
+
+Every shelf gets a hue and a shape, so eight shelves are one glance instead of
+eight reading tasks.
+
+The mark is a **hash of the shelf's own name**. Nothing is stored, nothing
+syncs, nothing can be lost, and the same shelf is the same colour on every
+machine you use, forever. The trade is that you cannot pick a colour and that
+renaming a shelf gives it a new one — both stated in the charter, and both
+cheaper than a settings key that would need a default, a migration and an answer
+for a renamed shelf.
+
+Two channels carry the same slot, so **either one alone identifies a shelf**:
+a reader who cannot separate two of the hues still has twelve distinct shapes.
+The leftovers shelf stays deliberately outside the palette — it is a remainder,
+not an idea.
+
+Both halves were measured in a real browser rather than eyeballed. `●` and `□`
+turned out to be **tofu** in GitHub's own font stack on Windows — the
+missing-glyph box, which at 10px passes for a marker — and a single lightness
+across all twelve hues put four of them below 3:1 on the light theme. Every hue
+now solves for its own lightness and clears **4.3:1 against both** `#ffffff` and
+`#0d1117`, with no theme detection anywhere. See `tests/identity.html` and
+`tests/glyph-probe.html`.
+
+### Vocabulary
+
+Press **vocabulary** in the toolbar. GitHub will show you one repo's topics, and
+it will show you every repo carrying one topic — but nothing anywhere shows you
+your labelling vocabulary *as a whole*, which is exactly why it rots: every
+individual decision looked fine.
+
+The panel names five things, and **draws what is certain differently from what
+is a guess**:
+
+| | |
+|---|---|
+| **one idea** | `ai-project` and `aiproject` are the same letters. Arithmetic, so they are merged and counted as a **union** of repos — two spellings across three repos is three, not four |
+| **narrower** | `ai` is a whole word inside `ai-project`. A suspicion, never merged |
+| **typo?** | `kubernetes` and `kubernets` are one character apart. Also a suspicion |
+| **blanket** | a topic on 5 of 6 tagged repos separates almost nothing; as a shelf it reproduces the flat list |
+| **used once** | a topic on one repo describes that repo. It will make a shelf of one |
+
+The count rides on the **closed** button, because a panel nobody opens tells
+nobody anything. Every topic is listed below the findings, and pressing one
+filters the page to the repos wearing it — a search you could not previously
+express. Topics that are already shelves wear that shelf's own mark, so the
+panel and the page below it are visibly the same map.
+
+It reads the topics the ladder already resolved: no request, no storage, and
+nothing written anywhere. Acting on what it says is still your job on GitHub,
+because editing topics would be a write and principle I says no.
+
 ### The optional token
 
 Without a token, private repos' topics are read from your own repo pages using
@@ -142,6 +199,15 @@ against a jsdom GitHub:
 | 8 | facts | one page read yields ten fields, topics still sidebar-scoped |
 | 9 | find | description, README, topic and language are all searchable |
 | 10 | note | written, painted, searchable — and survives a rescan |
+| 11 | vocabulary | families, suspicions, blanket labels and singletons, each drawn as what it is |
+| 12 | identity | a distinct hue and glyph per shelf, stable under any drawing order |
+
+Two things in there are **not** checkable without a browser, and both shipped
+wrong once: `tests/row-layout.html` measures the note margin against GitHub's
+real row, and `tests/identity.html` + `tests/glyph-probe.html` measure every
+palette slot for tofu and for contrast on both themes. Photograph them with
+anything that renders a page; jsdom computes no layout and cannot tell a shape
+from the missing-glyph box.
 
 Scenarios can be named as well as numbered — `node harness.js facts find` —
 and a selector that matches nothing **fails**. Roadmap proofs use keywords for
@@ -171,7 +237,8 @@ shelves/
 │       ├── dom.js          route detection, list finding, page merging
 │       ├── facts.js        ONE parse of a repo page → ten fields
 │       ├── topics.js       the four-rung topic ladder
-│       ├── view.js         bucketing and rendering
+│       ├── vocab.js        the topics as a system, and its panel
+│       ├── view.js         bucketing, rendering, shelf identity
 │       ├── main.js         lifecycle; one idempotent run()
 │       └── shelves.css     themed off GitHub's own CSS variables
 ├── tests/
@@ -216,3 +283,5 @@ lines in the code are load-bearing, and the charter is where the reasons live.
 | stale grouping after re-tagging | press **rescan** in the toolbar |
 | `/` does nothing | the cursor is in another field — `/` stands down inside inputs so it never steals a keystroke you meant for GitHub |
 | a note vanished | it was emptied; an empty note is deleted rather than stored blank. Nothing else removes one |
+| a shelf changed colour | you renamed it. The mark is a hash of the name, which is what lets it be the same on every machine with nothing stored |
+| two shelves look similar | they will still have different glyphs — the shape is the second channel and it never agrees with the wrong hue |

@@ -1,0 +1,223 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>shelf identity + vocabulary — real browser</title>
+<style>
+  /* GitHub's own custom properties, both themes, side by side. The extension
+     borrows this palette rather than guessing at one, so a fixture that does
+     not supply it is testing the fallbacks and nothing else. */
+  .pane {
+    --bgColor-default:#0d1117; --bgColor-muted:#161b22;
+    --bgColor-neutral-muted:#21262d; --fgColor-default:#e6edf3;
+    --fgColor-muted:#8b949e; --borderColor-default:#30363d;
+    --borderColor-emphasis:#6e7681; --borderColor-accent-emphasis:#1f6feb;
+    --fgColor-attention:#d29922;
+    background: var(--bgColor-default);
+    color: var(--fgColor-default);
+    padding: 16px; flex: 1 1 0; min-width: 0;
+  }
+  .pane.light {
+    --bgColor-default:#ffffff; --bgColor-muted:#f6f8fa;
+    --bgColor-neutral-muted:#eff2f5; --fgColor-default:#1f2328;
+    --fgColor-muted:#59636e; --borderColor-default:#d1d9e0;
+    --borderColor-emphasis:#818b98; --borderColor-accent-emphasis:#0969da;
+    --fgColor-attention:#9a6700;
+  }
+  body { margin:0; display:flex; align-items:flex-start;
+         font:14px/1.5 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif; }
+  ul { list-style:none; margin:0; padding:0; }
+  h3 { font-size:16px; font-weight:600; margin:0; }
+  h3 a { color:#4493f8; text-decoration:none; }
+  .light h3 a { color:#0969da; }
+  li { padding:8px 0; border-top:1px solid var(--borderColor-default); }
+  .probe { font:600 11px/2 ui-monospace,monospace; color:var(--fgColor-muted);
+           letter-spacing:.08em; margin:0 0 8px; }
+  pre.out { color:#7ee787; font:11px/1.5 ui-monospace,monospace;
+            white-space:pre-wrap; margin:16px 0 0; }
+  .light pre.out { color:#0a7c2f; }
+</style>
+<link rel="stylesheet" href="../extension/src/shelves.css">
+</head>
+<body>
+<div class="pane dark"><div class="probe">DARK</div><div id="host-dark"></div></div>
+<div class="pane light"><div class="probe">LIGHT</div><div id="host-light"></div></div>
+
+<script src="../extension/src/store.js"></script>
+<script src="../extension/src/dom.js"></script>
+<script src="../extension/src/facts.js"></script>
+<script src="../extension/src/vocab.js"></script>
+<script src="../extension/src/view.js"></script>
+<script>
+/* THE REAL MODULES, NOT A COPY OF THEM. identity() and vocabPanel() are called
+   here exactly as view.js calls them, so what is photographed below is the
+   shipped code's own output — a fixture that reimplements the markup can only
+   ever prove the fixture right. */
+const S = globalThis.Shelves;
+
+/* THIRTEEN SHELVES SO EVERY SLOT IS DRAWN. Twelve named labels exhaust the
+   palette exactly (the collision walk guarantees it), which means the shot
+   below is the whole system and not the handful of slots this month's shelves
+   happen to hash into — the first version drew nine, and the tofu it missed
+   was sitting in one of the four it never rendered. */
+const ORDER = ["aiproject", "tooling", "rag", "infra", "sketches", "archive",
+               "clients", "spikes", "datasets", "notebooks", "forks", "dotfiles",
+               "Ungrouped"];
+const COUNTS = [12, 9, 7, 5, 4, 4, 3, 2, 2, 2, 1, 1, 31];
+const OTHER = "Ungrouped";
+const MARKS = S.identity(ORDER, OTHER);
+
+const TOPICS = [
+  ["project", "ai-project"], ["project", "ai-project"], ["project", "aiproject"],
+  ["project", "ai"], ["project", "kubernetes"], ["kubernets"],
+];
+const NAMES = ["octo/alpha", "octo/beta", "octo/gamma",
+               "octo/delta", "octo/epsilon", "octo/zeta"];
+
+function bar(vdata) {
+  const b = document.createElement("div");
+  b.className = "sh-bar";
+  ["expand all", "collapse all", "flat list", "rescan"].forEach((t) => {
+    const x = document.createElement("button");
+    x.type = "button"; x.className = "sh-btn"; x.textContent = t;
+    b.append(x);
+  });
+  const v = document.createElement("button");
+  v.type = "button"; v.className = "sh-btn"; v.textContent = "vocabulary";
+  v.dataset.on = "1";
+  const badge = document.createElement("span");
+  badge.className = "sh-vbadge";
+  badge.textContent = String(S.vocabIssues(vdata));
+  v.append(" ", badge);
+  b.append(v);
+
+  const f = document.createElement("input");
+  f.type = "search"; f.className = "sh-find"; f.placeholder = "find  /";
+  const n = document.createElement("span");
+  n.className = "sh-note";
+  n.textContent = "77 repos · 9 shelves · 41 tagged · via repo pages";
+  b.append(f, n);
+  return b;
+}
+
+function build(into) {
+  const host = document.createElement("div");
+  host.id = "shelves-host";
+
+  const vdata = S.vocabulary(TOPICS, NAMES);
+  host.append(bar(vdata));
+  host.append(S.vocabPanel(vdata, { identity: MARKS, onPick: () => {} }));
+
+  ORDER.forEach((label, i) => {
+    const d = document.createElement("details");
+    d.className = "sh-shelf";
+    d.open = i === 0;
+    const mark = MARKS.get(label);
+    if (!S.paintMark(d, mark)) d.classList.add("sh-plain");
+
+    const sum = document.createElement("summary");
+    sum.className = "sh-sum";
+    const g = document.createElement("span");
+    g.className = "sh-glyph"; g.textContent = mark.glyph;
+    const nm = document.createElement("span");
+    nm.className = "sh-name"; nm.textContent = label;
+    const c = document.createElement("span");
+    c.className = "sh-count"; c.textContent = String(COUNTS[i]);
+    sum.append(g, nm, c);
+    d.append(sum);
+
+    const ul = document.createElement("ul");
+    ["throttle-kit", "commit-memory"].forEach((r) => {
+      const li = document.createElement("li");
+      li.innerHTML = '<h3><a href="#">' + r + "</a></h3>";
+      ul.append(li);
+    });
+    d.append(ul);
+    host.append(d);
+  });
+  into.append(host);
+  return host;
+}
+
+const hostDark = build(document.getElementById("host-dark"));
+const hostLight = build(document.getElementById("host-light"));
+
+/* ---- the probe --------------------------------------------------------- */
+/* MEASURE, DO NOT EYEBALL. Two things here cannot be seen in a screenshot at
+   a glance and both would be silent failures:
+
+   1. TOFU. A glyph the system font lacks renders as a box, which at 10px looks
+      enough like a square marker to pass a human's inspection. The check is
+      width against U+FFFF, a code point guaranteed to have no glyph anywhere:
+      equal widths means the "shape" on screen is the missing-glyph box.
+   2. CONTRAST. Each hue carries its OWN lightness, solved for a common
+      relative luminance, because at a fixed lightness blue and yellow land on
+      opposite sides of legible: 3.3:1 on dark and 2.2:1 on light respectively.
+      Every rule must clear 3:1 against BOTH backgrounds, which is what the
+      BELOW 3:1! marker below is watching for. */
+function lum(rgb) {
+  const c = rgb.map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+const parse = (s) => (s.match(/[\d.]+/g) || []).slice(0, 3).map(Number);
+const ratio = (a, b) => {
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+};
+
+function widthOf(ch, font) {
+  const s = document.createElement("span");
+  s.style.cssText = "position:absolute;visibility:hidden;white-space:pre;font:" + font;
+  s.textContent = ch;
+  document.body.append(s);
+  const w = s.getBoundingClientRect().width;
+  s.remove();
+  return w;
+}
+
+const out = [];
+const FONT = '10px -apple-system,"Segoe UI",Helvetica,Arial,sans-serif';
+const missing = widthOf("￿", FONT);
+let tofu = 0;
+
+[["dark", hostDark], ["light", hostLight]].forEach(([theme, host]) => {
+  const page = getComputedStyle(host.closest(".pane")).backgroundColor;
+  const bg = parse(page);
+  host.querySelectorAll("details.sh-shelf").forEach((d) => {
+    const label = d.querySelector(".sh-name").textContent;
+    const g = d.querySelector(".sh-glyph");
+    const cs = getComputedStyle(d);
+    const gs = getComputedStyle(g);
+    const w = g.getBoundingClientRect().width;
+    const gw = widthOf(g.textContent, FONT);
+    const isTofu = Math.abs(gw - missing) < 0.5;
+    if (isTofu) tofu++;
+    out.push(
+      theme.padEnd(6) + label.padEnd(11) +
+      " glyph=" + g.textContent +
+      " w=" + gw.toFixed(1) + (isTofu ? " TOFU!" : "") +
+      " rule=" + parseFloat(cs.borderLeftWidth).toFixed(0) + "px" +
+      " contrast=" + ratio(parse(cs.borderLeftColor), bg).toFixed(2) +
+      (label === "Ungrouped" ? "" :
+        (ratio(parse(cs.borderLeftColor), bg) < 3 ? "  BELOW 3:1!" : ""))
+    );
+  });
+  const b = host.querySelector(".sh-bar");
+  const p = host.querySelector(".sh-vocab");
+  out.push(theme.padEnd(6) + "bar h=" + Math.round(b.getBoundingClientRect().height) +
+    "  panel h=" + Math.round(p.getBoundingClientRect().height) +
+    "  findings=" + p.querySelectorAll(".sh-v-find").length +
+    "  chips=" + p.querySelectorAll(".sh-v-all .sh-term").length);
+});
+out.push("missing-glyph width = " + missing.toFixed(1) + "  ·  tofu glyphs = " + tofu);
+
+const pre = document.createElement("pre");
+pre.className = "out";
+pre.textContent = out.join("\n");
+document.querySelector(".pane.dark").append(pre);
+</script>
+</body>
+</html>
