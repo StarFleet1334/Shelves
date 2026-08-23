@@ -225,6 +225,13 @@ globalThis.Shelves = globalThis.Shelves || {};
      * not to do: move the DOM, do not rebuild it, and do not restyle rows you
      * are not touching. The flag marks the rows that genuinely need it. */
     if (col === li) li.dataset.shLoose = "1";
+    /* THE CLASS IS WHAT LETS AN EMPTY NOTE COST THE ROW NOTHING. A marker for
+     * a repo with no note is lifted out of flow and parked in the row's own
+     * bottom padding, and an absolutely-positioned child needs a positioned
+     * ancestor. Marking the column we chose — rather than styling every
+     * `li > div` — keeps that `position: relative` on the one element we
+     * actually put something inside (the same scar as `data-sh-loose`). */
+    else col.classList.add("sh-col");
     place(col, S.noteMarker(name, note, handlers));
   }
 

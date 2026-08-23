@@ -570,3 +570,82 @@
   color: var(--fgColor-muted, #8b949e);
   padding: 0 4px;
 }
+
+/* ---- AN EMPTY NOTE MUST COST THE ROW NOTHING ----------------------------
+   MEASURED ON THE REAL PAGE, against a real 54-repo profile in a real browser:
+   GitHub's own rows are 109px; ours were 131px; switching off the empty
+   marker put every one of them back to 109px exactly. That 22px is the whole
+   of the difference, on every row, and 54 of them is 1 188px — a screen and a
+   quarter of blank the reader scrolls past forever.
+
+   It reads as a BUG on the leftovers shelf and nowhere else, which is what
+   made it hard to name: a repo lands there because it has no topics, and a
+   repo with no topics usually has no description either, so its text column is
+   two lines. Two lines of text, then 22px of reserved nothing, then GitHub's
+   own 24px of padding — the empty half of the row is as tall as the full half.
+   On a shelf whose rows carry a description and topic chips the same 22px is a
+   tenth of the row and invisible.
+
+   THE ORIGINAL REASON FOR RESERVING IT WAS RIGHT and is kept: a pencil that
+   appeared on hover would grow the row and shove every row below it down the
+   page under the reader's cursor. So the marker is not made conditional — it
+   is lifted OUT OF FLOW and parked in the 24px of bottom padding the row
+   already has. Nothing moves on hover, and nothing is reserved.
+
+   Three things this is scoped by, each of them a bug if dropped:
+   `#shelves-host`, because the repo-page chip's marker lives in a sidebar with
+   no row and no padding to park in; `.sh-col`, because the unrecognised-markup
+   fallback appends to the <li> itself, where `top: 100%` is the NEXT row;
+   and `[data-has="0"]`, because a written note is content and belongs in the
+   flow — `paintNote()` flipping that one attribute is the whole transition. */
+#shelves-host .sh-col { position: relative; }
+#shelves-host .sh-col > .sh-margin[data-has="0"] {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: auto;
+  /* 16px line + 2px into 24px of padding: it cannot reach the row's border. */
+  margin: 2px 0 0;
+}
+/* Editing an empty note is the one case that must come back into the flow: a
+   textarea parked in 24px of padding would hang over the row below it. The
+   row growing here is correct — there is something in it now. */
+#shelves-host .sh-col > .sh-margin[data-has="0"][data-editing="1"] {
+  position: static;
+  width: 100%;
+  margin: 4px 0 2px;
+}
+
+/* ---- what was here before, and why it is not ----------------------------
+   A `#shelves-host li svg { max-height: 32px }` ceiling stood here, against a
+   theory that GitHub's commit sparkline arrives with a degenerate viewBox and
+   falls back to the 150px default for a replaced element. The theory was never
+   true of this page: the real fragment is
+   `<svg width="155" height="30" aria-hidden="true">` — sized attributes, NO
+   viewBox at all — and it measures 30px on every row. Removing the ceiling on
+   the live page changed the height of exactly zero of 54 rows. It was a fix
+   for a fixture, and the fixture had been written from the same guess it was
+   meant to test. The rows really were too tall; the reason was the line above.
+   ------------------------------------------------------------------------ */
+
+/* ---- A ROW'S HEIGHT IS NEVER AN ERROR MESSAGE'S TO DECIDE ---------------
+   dom.js drops the stranded fragments on the way in, which is the fix; this
+   is the floor under it. A lazy fragment can fail for reasons that have
+   nothing to do with merging — a real 403, a network that went away — and
+   when GitHub's <poll-include-fragment> fails it reveals a blankslate it was
+   given for a full-width page. In the 145px column a repo row gives it, "Uh
+   oh! There was an error while loading." wraps to roughly one character per
+   line and the row becomes 1 400px of vertical text that reads as blank.
+
+   Hiding it IS a judgement and it is stated: the fragment is a commit
+   sparkline, its failure costs the reader a green line, and the message is
+   GitHub's page-level prose rendered at a width where it cannot be read
+   anyway. A row that quietly has no graph is the honest rendering of that;
+   a row that is fourteen screens tall is not.
+
+   `[data-show-on-forbidden-error]` is matched as well as the element, because
+   a fragment that has already replaced itself leaves the blankslate behind
+   with no `is-error` element above it. */
+#shelves-host li poll-include-fragment.is-error,
+#shelves-host li include-fragment.is-error,
+#shelves-host li [data-show-on-forbidden-error] { display: none !important; }

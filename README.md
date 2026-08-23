@@ -327,9 +327,25 @@ of them shipped wrong once: `tests/row-layout.html` measures the note margin
 against GitHub's real row, `tests/identity.html` + `tests/glyph-probe.html`
 measure every palette slot for tofu and for contrast on both themes, and
 `tests/mark.html` measures the repo-page chip inside a real 296px sidebar —
-which is the only width at which a long shelf name can overflow. Photograph them with
-anything that renders a page; jsdom computes no layout and cannot tell a shape
-from the missing-glyph box.
+which is the only width at which a long shelf name can overflow. Photograph
+them with anything that renders a page; jsdom computes no layout and cannot
+tell a shape from the missing-glyph box.
+
+One class of bug not even a fixture can see, because it is about how much room
+we take on **GitHub's** page rather than about our own markup: `tests/row-
+height.py` loads the unpacked extension into a real browser, opens a real
+profile, and asserts that a shelved row is exactly as tall as GitHub's own —
+switching each of our rules off in the live page to find out which one owns the
+difference.
+
+**Run it signed in.** A signed-out profile is a different page, not a cheaper
+sample of the same one: the lazy fragments GitHub ships inside a repo row only
+refuse to load when they carry a nonce that is checked, and that is the
+signed-in response. Merged rows there arrive with a fragment from another
+page's nonce, fail without ever reaching the network, and reveal a full-width
+error blankslate into a 145px column — 47 rows at 1 416px each, which reads as
+blank because nothing in it is legible at that width. Measured signed out, the
+same page is clean. The test now says so when it is run without a session.
 
 Scenarios can be named as well as numbered — `node harness.js facts find` —
 and a selector that matches nothing **fails**. Roadmap proofs use keywords for

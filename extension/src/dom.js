@@ -187,6 +187,36 @@ globalThis.Shelves = globalThis.Shelves || {};
   const nextLink = (root) =>
     root.querySelector('.paginate-container a[rel="next"], a.next_page');
 
+  /* A ROW MERGED FROM ANOTHER PAGE LEAVES ITS SPARKLINE BEHIND, AND THERE IS
+   * NO WAY TO BRING IT. GitHub's commit graph is a <poll-include-fragment>
+   * that carries a `data-nonce` belonging to the response it was served in,
+   * and page 2's nonce is not page 1's. Imported into this document it never
+   * reaches the network at all — measured on a real signed-in profile: 30
+   * requests for the 30 rows GitHub served, and zero for the 47 we merged.
+   * It goes straight to `is-error` and reveals the `data-show-on-forbidden-
+   * error` blankslate GitHub ships inside it.
+   *
+   * THAT BLANKSLATE IS A FULL-WIDTH PAGE ELEMENT AND IT LANDS IN A 145px
+   * COLUMN, where "Uh oh! There was an error while loading." wraps to about
+   * one character per line. Measured, signed in, in a real browser: 47 rows at
+   * 1 416px each against 109px for the ones GitHub served itself — 60 000px of
+   * vertical error message, which reads as blank because at that width there
+   * is nothing legible in it. It is invisible signed OUT, where the fragments
+   * load, which is exactly how it survived being looked for twice.
+   *
+   * So the fragment is dropped on the way in. We know it cannot work; keeping
+   * it means keeping the error. The cost is a missing green line on merged
+   * rows — which is all the reader ever had there — and the alternative is 47
+   * more authenticated requests for a decoration nobody asked us to fetch.
+   *
+   * Every OTHER lazy fragment in a merged row is stranded for the same reason,
+   * so this is written against the element and not against the sparkline. */
+  S.dropStrandedFragments = function dropStrandedFragments(row) {
+    row.querySelectorAll("include-fragment, poll-include-fragment")
+       .forEach((f) => f.remove());
+    return row;
+  };
+
   /* MEASURED (charter §3): the tab paginates at 30. Grouping only page one
    * gives shelves that are silently incomplete, which is worse than none.
    * Same-origin fetches, so the session cookie rides along for free (P.VII). */
@@ -206,7 +236,11 @@ globalThis.Shelves = globalThis.Shelves || {};
       }
       const ul = S.findList(doc);
       if (!ul) break;
-      S.rowsOf(ul).forEach((li) => out.push(document.importNode(li, true)));
+      S.rowsOf(ul).forEach((li) => {
+        const row = document.importNode(li, true);
+        S.dropStrandedFragments(row);
+        out.push(row);
+      });
       const nx = nextLink(doc);
       url = nx ? new URL(nx.getAttribute("href"), location.origin).href : null;
       n++;
