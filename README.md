@@ -760,10 +760,59 @@ npm install                     # jsdom, once — the extension itself has no de
 node harness.js                 # all 38 scenarios
 node harness.js ladder-floor    # just that one
 node harness.js facts find      # two of them
+
+node redteam.js                 # 435 adversarial probes, five plugins
+node redteam.js settings        # one plugin, by keyword
 ```
 
 Thirty-eight scenarios drive the real content scripts and the real service
 worker against a jsdom GitHub.
+
+### The red team
+
+`harness.js` asserts that the product does what it claims. `redteam.js` asserts
+that hostile input cannot make it do anything else — and the two are different
+questions, which is why they are different files. A finding there earns a
+scenario here: the scenario is the regression test, the red team is the search.
+
+**It is not a red team of a model, and it does not pretend to be.** The
+published guides for red-teaming an assistant aim at prompts — jailbreaks,
+encoding tricks, reasoning exhaustion — and none of it has any purchase here.
+SHELVES contains no model, no prompt and no API to one, so that tooling would
+return a clean report that means nothing. What transfers is the *method*:
+adversarial cases grouped into plugins, generated rather than hand-picked, each
+carrying a severity, exiting non-zero when something gets through, so it can
+gate a commit. What changes is the threat model, which for a content script is:
+
+> an attacker who controls a repository page the reader visits — its name, its
+> topics, its description, its README, its hrefs — and, at the edges, a
+> corrupted or hand-edited local store.
+
+Five plugins ask one question between them: can any of that reach a URL, a
+credential, the DOM as markup, or the CPU for long enough to freeze the tab.
+
+- **`urls`** — every crafted owner/repo pair through `safeRepo` and into both
+  sinks that build a URL by concatenation (`fetch("/" + name)` and the
+  workbench's `window.open`). None may leave github.com. It also writes each
+  accepted name into an object and asks the prototype afterwards, because the
+  hazard is a key that IS `__proto__`, not a name that contains it.
+- **`settings`** — `groups` is the reader's text, but it is text: it syncs
+  between machines, it is written from page-derived suggestions, and it is
+  parsed on every render. Every entry must parse in linear time, produce a
+  bounded label, and — if nothing in it could be read — match **nothing**.
+- **`store`** — the local stores with junk in them: a `topics` that is a
+  string, an `updated` that is a word, an override that is an object, a
+  `__proto__` key. A corrupt store must cost grouping and never sense.
+- **`exhaustion`** — 5 000 repositories through the vocabulary, the audit, the
+  suggestions and a 200-term rule, against a stated time budget.
+- **`reach`** — the manifest's permissions and hosts, and a sweep of every
+  shipped file for a host we do not own, for `eval`, and for any HTML sink.
+
+Two findings from the first run are fixed and are in the scars: `topic:ai`
+matched a `topics` value of `"chai-latte"` because `indexOf` is a substring
+test on a string, and a corrupt override drew a shelf called `[object Object]`
+holding real repositories. Neither is reachable from a live path today, which
+is exactly why neither would have been noticed.
 
 **Name a scenario by keyword, never by number.** A number is an index and it
 moves: scenarios were appended, `harness.js 8` stopped meaning the ladder and

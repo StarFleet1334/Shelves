@@ -41,12 +41,29 @@ globalThis.Shelves = globalThis.Shelves || {};
 
   /* `Name = expression`. The separator is `=` and not `:` because every term
    * inside the expression already uses `:`, and a label is allowed to contain
-   * one. */
-  const SPLIT = /^([^=]+?)\s*=\s*(.+)$/;
+   * one.
+   *
+   * SPLIT WITH `indexOf`, NOT A REGEX. `^([^=]+?)\s*=\s*(.+)$` reads as the
+   * obvious spelling and is QUADRATIC: the lazy group grows one character at a
+   * time and `\s*=` re-fails at every position. Measured on an entry with no
+   * `=` in it — 5k chars 13ms, 10k 51ms, 20k 200ms, 40k 793ms, 80k 3 169ms,
+   * time going up fourfold each time the input doubles. It runs on every group
+   * entry on every render, twice with a progressive one, so one pasted blob in
+   * the options page freezes the tab.
+   *
+   * The semantics are simply "the first `=` wins", which is one scan. */
+  function split(entry) {
+    const str = String(entry || "");
+    const at = str.indexOf("=");
+    if (at === -1) return null;
+    const label = str.slice(0, at).trim();
+    const source = str.slice(at + 1).trim();
+    return label && source ? { label, source } : null;
+  }
 
   /** Is this group entry a rule, or the plain topic string shelves began with? */
   S.isRule = function isRule(entry) {
-    return SPLIT.test(String(entry || ""));
+    return !!split(entry);
   };
 
   const UNITS = { d: 1, w: 7, m: 30, y: 365 };
@@ -88,10 +105,10 @@ globalThis.Shelves = globalThis.Shelves || {};
    *          silently — the caller is expected to print it.
    */
   S.parseRule = function parseRule(entry) {
-    const m = SPLIT.exec(String(entry || ""));
+    const m = split(entry);
     if (!m) return null;
-    const label = m[1].trim().slice(0, 60);
-    const source = m[2].trim();
+    const label = m.label.slice(0, 60);
+    const source = m.source;
     const terms = [];
     const bad = [];
 
@@ -180,7 +197,16 @@ globalThis.Shelves = globalThis.Shelves || {};
    */
   S.matchRule = function matchRule(rule, facts, topics, now) {
     const f = facts || {};
-    const list = topics || f.topics || [];
+    /* A LIST, OR NOTHING. `list.indexOf(value)` is a membership test on an
+     * array and a SUBSTRING test on a string — so a record whose `topics` came
+     * back as text made `topic:ai` match "chai-latte". Nothing on a live path
+     * can produce that (`topicsIn` builds an array, `factsFromApi` guards with
+     * `Array.isArray`, `scrape` gates on it), which is exactly why it would
+     * have gone unnoticed: it needs a store written by a different version, a
+     * half-finished write, or a hand-edit. A pure function should not care how
+     * it was reached. */
+    const list = Array.isArray(topics) ? topics
+      : Array.isArray(f.topics) ? f.topics : [];
     const when = now || Date.now();
     let unknown = false;
 

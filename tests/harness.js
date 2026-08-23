@@ -901,6 +901,11 @@ const SCENARIOS = [
     bench.click();
     assert(ctx, opened.length === 1 && /octo\/one$/.test(opened[0]),
       "the first press opens the first untagged repo, got: " + opened.join());
+    /* AND ONLY EVER ON GITHUB. The name in that URL came off an href the page
+       supplied — the same untrusted string the fetch path was scarred for. */
+    assert(ctx, opened.every((u) => {
+      try { return new w.win.URL(u).host === "github.com"; } catch (e) { return false; }
+    }), "every tab the walk opens is on github.com, got: " + opened.join());
     assert(ctx, /2 of 2/.test(bench.textContent),
       "and the button says what is NEXT, got: " + bench.textContent);
     bench.click();
@@ -2510,7 +2515,49 @@ const SCENARIOS = [
       const li = w2.win.document.querySelector("#shelves-host li");
       assert(ctx, li && li.dataset.shName === "me/real",
         "a legitimate row keeps its name, got: " + (li && li.dataset.shName));
-      ctx.info = good.length + " accepted, " + bad.length + " rejected";
+      /* ---- AND THE ONE PLACE A NAME NOW BECOMES A URL ----------------------
+         The workbench opens `https://github.com/<name>` in a tab. That is a
+         second sink for the same untrusted string, added after the scar that
+         named the first one, so it is checked the same way: every crafted
+         shape that `safeRepo` lets through must still land on github.com. */
+      const crafted = [
+        ["evil.com", "x"], ["", "evil.com"], ["..", "evil.com"],
+        ["settings", "tokens"], ["a", "../../settings/tokens"],
+        ["a", "b?next=//evil.com"], ["evil.com:8080", "x"], ["@evil.com", "x"],
+        ["a\evil.com", "x"], ["a", "b%2f..%2fsettings"], ["javascript", "alert"],
+      ];
+      let offHost = 0, passed = 0;
+      crafted.forEach(([o, r]) => {
+        const n = w.win.Shelves.safeRepo(o, r);
+        if (!n) return;
+        passed++;
+        let host = null;
+        try { host = new w.win.URL("https://github.com/" + n).host; } catch (e) {}
+        if (host !== "github.com") offHost++;
+      });
+      assert(ctx, offHost === 0,
+        "a name that reaches window.open must not steer it off github.com, " +
+        offHost + " of " + passed + " did");
+
+      /* ---- SETTINGS ARE INPUT TOO -----------------------------------------
+         `settings.groups` is parsed on every render — twice on a progressive
+         one — and the obvious spelling of "Name = expression",
+         `^([^=]+?)\s*=\s*(.+)$`, is QUADRATIC: the lazy group grows one
+         character at a time and `\s*=` re-fails at every position. Measured on
+         an entry with no `=` in it: 5k chars 13ms, 20k 200ms, 80k 3 169ms —
+         fourfold for every doubling, and it freezes the tab. It is one scan,
+         not a regex. */
+      const big = "A" + " ".repeat(200000) + "B";
+      const t0 = Date.now();
+      w.win.Shelves.isRule(big);
+      w.win.Shelves.parseRule(big);
+      const ms = Date.now() - t0;
+      assert(ctx, ms < 100,
+        "the rule parser must stay linear in the length of a group entry: " +
+        "200k chars took " + ms + "ms");
+
+      ctx.info = good.length + " accepted, " + bad.length + " rejected; " +
+        passed + " crafted names contained; 200k-char entry parsed in " + ms + "ms";
     }),
 
   check("forgets - the fact cache is not immortal", async (ctx) => {

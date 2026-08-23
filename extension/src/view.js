@@ -23,7 +23,11 @@ globalThis.Shelves = globalThis.Shelves || {};
    * most of them.
    */
   S.bucketFor = function bucketFor(topics, settings, override, facts, specs) {
-    const own = String(override == null ? "" : override).trim();
+    /* A STRING, OR NO OPINION. `String(anything)` is total, which is the
+     * problem: a corrupt store handing back an object drew a shelf named
+     * `[object Object]` holding real repositories. An override that is not
+     * text is not an override. */
+    const own = typeof override === "string" ? override.trim() : "";
     if (own) {
       /* A CONFIGURED SHELF OWNS THE SPELLING OF ITS OWN NAME. An override is
        * stored verbatim, and the label it was stored with is whatever was
