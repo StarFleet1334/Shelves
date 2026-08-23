@@ -172,6 +172,69 @@ document.addEventListener("DOMContentLoaded", () => {
       flash("Cached repo facts cleared — your notes are untouched"));
   });
 
+  /* ---- the way out, and the way back in --------------------------------
+   * Both halves are file I/O and nothing else: `Shelves.backup` in store.js
+   * owns what a backup contains and what an incoming one is allowed to do,
+   * because that is the part with a decision in it and this page has no way
+   * to test itself.
+   *
+   * `<a download>` needs NO `downloads` permission — that permission is for
+   * the `chrome.downloads` API, and an anchor from an extension page is an
+   * ordinary link. Checked before building it, because a feature that costs a
+   * permission is a different feature (P.II). */
+  const said = (msg) => { $("backupSaid").textContent = msg; };
+
+  $("export").addEventListener("click", async () => {
+    try {
+      const data = await Shelves.backup.pack();
+      const counts = Shelves.backup.keys
+        .map((k) => Object.keys(data[k]).length);
+      if (!counts.some(Boolean)) return said("nothing written down yet");
+      const blob = new Blob([JSON.stringify(data, null, 2)],
+                           { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const day = new Date(data.exported).toISOString().slice(0, 10);
+      a.download = "shelves-" + day + ".json";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      /* Revoked, or the blob is held for the life of the page — and this page
+       * is a popup people leave open. */
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      said(counts[0] + " notes, " + counts[1] + " shelved by hand, " +
+           counts[2] + " pinned");
+    } catch (e) {
+      said("could not write that file");
+    }
+  });
+
+  $("importPick").addEventListener("click", () => $("importFile").click());
+
+  $("importFile").addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";                      // so the same file can be re-picked
+    if (!file) return;
+    /* A FILE IS THE MOST UNTRUSTED INPUT THIS EXTENSION TAKES, and the only one
+     * that arrives without GitHub in front of it. Bounded before it is read:
+     * a backup of a 600-repo account is tens of kilobytes. */
+    if (file.size > 4 * 1024 * 1024) return said("that file is too large to be one of ours");
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch (err) {
+      return said("that is not a Shelves export");
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return said("that is not a Shelves export");
+    }
+    const r = await Shelves.backup.restore(parsed);
+    if (!r.ok) return said("could not save what was in that file");
+    said(r.added + " added, " + r.kept + " already here and left alone" +
+         (r.skipped ? ", " + r.skipped + " ignored" : ""));
+  });
+
   // Ctrl/Cmd+S saves, because this doubles as a popup people close fast.
   document.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {

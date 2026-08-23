@@ -151,6 +151,29 @@
       first refusal.
     </p>
 
+    <h2>Your own work</h2>
+    <p class="hint" style="margin-top:0">
+      Your <strong>notes</strong>, the repos you have <strong>put on a shelf by
+      hand</strong>, and your <strong>pins</strong> are the only things here
+      that nothing can rebuild — no rescan re-derives a sentence you wrote.
+      They live in this browser and nowhere else, deliberately: they are too
+      big for synced storage and a credential's neighbours do not belong there.
+      That also means one profile reset takes them, so here is the way out.
+    </p>
+    <div class="row" style="margin-top:8px">
+      <button id="export">Export…</button>
+      <button id="importPick">Import…</button>
+      <input type="file" id="importFile" accept="application/json,.json" hidden />
+      <span id="backupSaid" class="hint"></span>
+    </div>
+    <p class="hint">
+      The file is plain JSON and it contains <strong>the names of your private
+      repositories</strong> alongside anything you wrote about them — treat it
+      the way you would treat that list. Importing <em>merges</em>: where both
+      sides know a repo, the one already here wins, so a restore can never
+      overwrite something you wrote since.
+    </p>
+
     <div class="foot">
       <button class="primary" id="save">Save</button>
       <button id="clear">Clear topic cache</button>
@@ -162,6 +185,13 @@
       the page in your browser — uninstalling it leaves GitHub exactly as it was.
     </p>
 
+    <!-- The backup merge is `Shelves.backup` in src/store.js, and `store.js`
+         leans on `safeRepo` from `dom.js` to decide whether a key out of a
+         file names a repository at all. Loading the two here is what keeps
+         one copy of each rule: a second name-validator written for this page
+         is a second one to drift. -->
+    <script src="src/store.js"></script>
+    <script src="src/dom.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

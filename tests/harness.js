@@ -1774,6 +1774,98 @@ const SCENARIOS = [
     ctx.info = "pinned rows first, in the order they were pinned";
   }),
 
+  check("backup - the three things nothing can rebuild can get out, and back in",
+    async (ctx) => {
+    /* The fact cache is derived and a rescan re-earns it; `groups` is a few
+       words you can retype. Notes, by-hand shelvings and pins are none of
+       that. And the charter lists "uninstalling is a complete undo" as a
+       FEATURE — which it is, right up until it is pointed at the one category
+       P.I exempts from being derivable. One profile reset took all three. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] }, apiRepos: [],
+      notes: { "octo/a": "the flaky one" },
+      overrides: { "octo/b": "keep" },
+      pins: { "octo/c": 1700000000000 },
+      repos: [{ name: "a", topics: [] }, { name: "b", topics: [] },
+              { name: "c", topics: ["keep"] }],
+    });
+    await settle(1400);
+    const S = w.win.Shelves;
+
+    const packed = await S.backup.pack(1700000000000);
+    assert(ctx, packed.notes["octo/a"] === "the flaky one" &&
+                packed.overrides["octo/b"] === "keep" &&
+                packed.pins["octo/c"] === 1700000000000,
+      "an export carries all three stores, got: " + JSON.stringify(packed));
+    assert(ctx, !("token" in packed) && !("repoFacts" in packed) &&
+                !("shelfMap" in packed),
+      "and nothing else - a credential must never be in a file the reader " +
+      "is invited to move between machines: " + Object.keys(packed).join());
+
+    /* THE INCUMBENT WINS EVERY COLLISION. Importing is what a reader does when
+       they are worried about losing something; a silent overwrite of the
+       sentence they wrote this morning is the one unrecoverable act this
+       extension would be capable of. */
+    const incoming = JSON.parse(JSON.stringify({
+      shelves: 1,
+      notes: { "octo/a": "THEIRS", "octo/d": "a new one" },
+      overrides: { "octo/d": "keep" },
+      pins: { "octo/d": 1 },
+    }));
+    const r = S.backup.merge(
+      { notes: packed.notes, overrides: packed.overrides, pins: packed.pins },
+      incoming);
+    assert(ctx, r.stores.notes["octo/a"] === "the flaky one",
+      "a note already here survives an import, got: " +
+      JSON.stringify(r.stores.notes["octo/a"]));
+    assert(ctx, r.stores.notes["octo/d"] === "a new one", "and a new one lands");
+    assert(ctx, r.added === 3 && r.kept === 1,
+      "counted so that 'nothing happened' and 'you already had all of it' are " +
+      "different sentences: added " + r.added + ", kept " + r.kept);
+
+    /* A FILE IS THE MOST UNTRUSTED INPUT THIS EXTENSION TAKES — the only one
+       that arrives without GitHub in front of it.
+
+       `JSON.parse` and not an object literal, and the difference is the whole
+       point: `{"__proto__": x}` written as a LITERAL sets the prototype and
+       `Object.keys` never sees the key, so a fixture built that way tests
+       nothing. Parsed from text it is a real own property, which is what the
+       import path actually receives. */
+    const hostile = JSON.parse('{"notes":{' +
+      '"__proto__":"pwned",' +
+      '"constructor":"pwned",' +
+      '"octo/e":"fine",' +
+      '"nota/repo/name":"x",' +
+      '"NOSLASH":"x",' +
+      '"../../settings/tokens":"x",' +
+      '"octo/f":{"deep":1},' +
+      '"octo/g":12345' +
+      '},"pins":{"octo/e":"notatimestamp"},"overrides":{"octo/e":["array"]}}');
+    const h = S.backup.merge({ notes: {}, overrides: {}, pins: {} }, hostile);
+    assert(ctx, ({}).pwned === undefined &&
+                Object.getPrototypeOf({}) === Object.prototype,
+      "a key out of a file must not reach Object.prototype");
+    assert(ctx, Object.keys(h.stores.notes).join() === "octo/e",
+      "only keys that name a repository survive, got: " +
+      Object.keys(h.stores.notes).join(" | "));
+    assert(ctx, !Object.keys(h.stores.pins).length &&
+                !Object.keys(h.stores.overrides).length,
+      "and only values of the shape that store holds, got pins " +
+      JSON.stringify(h.stores.pins) + " overrides " +
+      JSON.stringify(h.stores.overrides));
+    /* Seven keys in `notes` that name no repository or carry the wrong shape,
+       plus one in `pins` and one in `overrides`. */
+    assert(ctx, h.skipped === 9,
+      "every refusal is counted rather than silent, got " + h.skipped);
+
+    /* AND IT ROUND-TRIPS THROUGH THE STORE, not just through the merge. */
+    const back = await S.backup.restore({ notes: { "octo/z": "restored" } });
+    assert(ctx, back.ok && (await S.notes.read())["octo/z"] === "restored",
+      "a restore reaches the store the page reads");
+    ctx.info = "3 stores out, incumbent wins, 9 hostile keys refused";
+  }),
+
   check("vocabulary - the tag system, read as a system", async (ctx) => {
     /* Every finding the panel can make, in one small collection:
          project      on 5 of 6 tagged repos      -> a blanket label

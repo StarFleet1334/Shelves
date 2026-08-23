@@ -300,6 +300,102 @@ globalThis.Shelves = globalThis.Shelves || {};
     },
   };
 
+  /* ---- the three things nothing can rebuild, and the way out --------------
+   * The fact cache is derived and a rescan re-earns it. `settings.groups` is
+   * a few words you can retype. Your NOTES, your OVERRIDES and your PINS are
+   * none of that: no request re-derives a sentence you wrote about a repo, or
+   * the fact that this one belongs on that shelf.
+   *
+   * And the charter lists "uninstalling is a complete undo" as a FEATURE,
+   * which it is — right up until it is pointed at the one category P.I
+   * exempts from being derivable. Those two sentences are both true and
+   * together they mean the only irreplaceable thing here lives in exactly one
+   * place, on one machine, deliberately out of sync, with no way off it. A
+   * profile reset, a new laptop or a mis-click on *Remove extension* takes it.
+   *
+   * PURE, so the merge can be tested without a file picker: `pack` builds the
+   * object and `merge` decides what an incoming one is allowed to do. The
+   * options page does the file I/O and nothing else.
+   */
+  const BACKUP_KEYS = [NOTES_KEY, OVER_KEY, PIN_KEY];
+
+  S.backup = {
+    keys: BACKUP_KEYS,
+
+    async pack(now) {
+      const got = await get("local", { [NOTES_KEY]: {}, [OVER_KEY]: {}, [PIN_KEY]: {} });
+      const out = { shelves: 1, exported: now || Date.now() };
+      BACKUP_KEYS.forEach((k) => {
+        out[k] = got[k] && typeof got[k] === "object" ? got[k] : {};
+      });
+      return out;
+    },
+
+    /**
+     * @returns {{stores, added, kept, skipped}}
+     *
+     * MERGE, NEVER OVERWRITE, and on a collision the INCUMBENT wins. Importing
+     * is something a reader does when they are worried about losing something;
+     * a silent overwrite of the sentence they wrote this morning is the one
+     * unrecoverable act this extension would be capable of. `kept` is reported
+     * so "nothing happened" and "you already had all of it" are different
+     * sentences on screen.
+     */
+    merge(current, incoming) {
+      const stores = {};
+      let added = 0, kept = 0, skipped = 0;
+      const src = incoming && typeof incoming === "object" ? incoming : {};
+      BACKUP_KEYS.forEach((key) => {
+        const have = (current && current[key] && typeof current[key] === "object")
+          ? current[key] : {};
+        const out = { ...have };
+        const from = src[key];
+        if (from && typeof from === "object" && !Array.isArray(from)) {
+          Object.keys(from).forEach((rawName) => {
+            /* A KEY OUT OF A FILE IS NOT A KEY YET. `__proto__` assigned on an
+             * object literal walks straight up the prototype chain, and a name
+             * that is not `owner/repo` names nothing this page can ever draw —
+             * so it would sit in the store for ever, unreachable and
+             * unremovable through the UI. */
+            const name = String(rawName).toLowerCase();
+            const parts = name.split("/");
+            if (parts.length !== 2 || !S.safeRepo(parts[0], parts[1])) {
+              skipped++;
+              return;
+            }
+            if (Object.prototype.hasOwnProperty.call(out, name)) {
+              kept++;
+              return;
+            }
+            const v = from[rawName];
+            /* Each store has one shape, and a value of any other shape is not
+             * something this reader wrote — it is something that got in. */
+            const ok = key === NOTES_KEY ? (typeof v === "string" && v.trim())
+              : key === OVER_KEY ? (typeof v === "string" && v.trim())
+              : (v === true || typeof v === "number");
+            if (!ok) {
+              skipped++;
+              return;
+            }
+            out[name] = key === PIN_KEY
+              ? (typeof v === "number" ? v : 1)
+              : String(v).trim().slice(0, key === NOTES_KEY ? 2000 : 60);
+            added++;
+          });
+        }
+        stores[key] = out;
+      });
+      return { stores, added, kept, skipped };
+    },
+
+    async restore(incoming) {
+      const current = await get("local", { [NOTES_KEY]: {}, [OVER_KEY]: {}, [PIN_KEY]: {} });
+      const res = this.merge(current, incoming);
+      const ok = await set("local", res.stores);
+      return { ok, ...res };
+    },
+  };
+
   /* ---- the shelf map: what the profile page worked out, left for the ----
    * ---- pages that cannot work it out for themselves ---------------------
    *

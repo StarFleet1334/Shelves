@@ -741,6 +741,15 @@ a line of your code and cannot write anything at all. It is stored in
 `chrome.storage.local` — never in synced storage, so it does not travel to your
 other machines — and is sent to `api.github.com` and nowhere else.
 
+**Do not paste a classic token here**, and especially not one you already have
+lying around. A classic personal access token has no permission finer than
+`repo`, and `repo` can *write* to every repository you own — issues, code,
+releases, settings. SHELVES would never use one byte of that, which is the
+problem: you would be storing a key to your whole account, unencrypted in a
+browser profile, to save one request per repository. The five steps above take
+a minute and produce a credential that cannot do anything but list what you
+already see.
+
 **A rejected token falls back to a request, not to a label.** If it has expired
 or been revoked, the toolbar says `token rejected (401)` and the run *re-asks
 the public endpoint without the credential* before anything else — so the line
@@ -757,15 +766,15 @@ repository you own, one at a time.
 ```
 cd tests
 npm install                     # jsdom, once — the extension itself has no dependencies
-node harness.js                 # all 38 scenarios
+node harness.js                 # all 39 scenarios
 node harness.js ladder-floor    # just that one
 node harness.js facts find      # two of them
 
-node redteam.js                 # 435 adversarial probes, five plugins
+node redteam.js                 # 533 adversarial probes, six plugins
 node redteam.js settings        # one plugin, by keyword
 ```
 
-Thirty-eight scenarios drive the real content scripts and the real service
+Thirty-nine scenarios drive the real content scripts and the real service
 worker against a jsdom GitHub.
 
 ### The red team
@@ -803,6 +812,11 @@ credential, the DOM as markup, or the CPU for long enough to freeze the tab.
 - **`store`** — the local stores with junk in them: a `topics` that is a
   string, an `updated` that is a word, an override that is an object, a
   `__proto__` key. A corrupt store must cost grouping and never sense.
+- **`import`** — a backup file from anywhere, always through `JSON.parse` and
+  never an object literal, because `{"__proto__": x}` written as a literal sets
+  the prototype and `Object.keys` never sees the key — a probe built that way
+  tests nothing. Keys that name no repository and values of the wrong shape are
+  refused; a note already here is never overwritten.
 - **`exhaustion`** — 5 000 repositories through the vocabulary, the audit, the
   suggestions and a 200-term rule, against a stated time budget.
 - **`reach`** — the manifest's permissions and hosts, and a sweep of every
@@ -878,6 +892,8 @@ release too long — by the end its row 17 said `identity` while scenario 17 was
 - `pin-top` — a pinned repo opens at the top of its shelf, pinning puts a row
   below the ones already pinned, unpinning drops it back under them, and the
   key is written and removed with it
+- `backup` — the three things nothing can rebuild go out to a file and come
+  back, merging rather than overwriting, refusing what a file should not carry
 - `vocabulary` — families, suspicions, blanket labels and singletons, each drawn
   as what it is, and 3 000 topics in milliseconds
 - `audit` — gaps denominated per field per source; a finding filters to its own
@@ -970,7 +986,7 @@ shelves/
 │       └── shelves.css     themed off GitHub's own CSS variables
 ├── tests/
 │   ├── world.js            fake GitHub: jsdom + chrome stub + real worker in a vm
-│   ├── harness.js          the 38 scenarios, selected by keyword
+│   ├── harness.js          the 39 scenarios, selected by keyword
 │   └── package.json        jsdom, dev only
 └── tools/make_icons.py     regenerates the icons from source
 ```
@@ -980,6 +996,80 @@ and seven facts that were established by measurement — several of the odder
 lines in the code are load-bearing, and the charter is where the reasons live.
 
 ---
+
+## Security — what the risks actually are
+
+Every risk here follows from one fact: this is a content script with your
+GitHub session, and everything it keeps is on your disk.
+
+**Everything is at rest, unencrypted, in your browser profile.** That is the
+big one and it is inherent to extensions, not a defect: `chrome.storage.local`
+is a file. It holds the token if you added one, your notes, your overrides,
+your pins, a fact cache containing **private repository names and the opening
+of their READMEs**, and a shelf map recording which shelf each of your repos is
+on. Anyone with access to that profile reads all of it. If you share a machine,
+that is the sentence to weigh. Uninstalling removes it; so does *Clear topic
+cache* for the derived half.
+
+**It runs on every github.com page you visit** — the whole origin, minus eight
+excluded routes (`/settings/*`, `/login*`, `/sessions/*` and friends). It has
+to: the shelf mark lives on repository pages. It means any parsing bug ships to
+every page you open, including private repositories, which is why the row
+parsers are structural and why `redteam.js` exists.
+
+**A token is optional and its scope is the whole risk.** See *The optional
+token* above: fine-grained, `Metadata: Read-only`, never a classic `repo` one.
+
+**An export is a file with your private repository names in it.** That is the
+price of being able to move your notes to another machine; the options page
+says so beside the button.
+
+What is *not* a risk, checked rather than asserted — `node tests/redteam.js`,
+533 probes across six plugins:
+
+- no name from a page can steer a request off `github.com`, through either
+  sink that builds a URL by concatenation
+- nothing in the extension names a host other than `github.com` and
+  `api.github.com`; there is no `eval`, no `new Function`, and **no HTML sink
+  anywhere in what ships** — every string from a page reaches the DOM as text
+- no group entry, however long, takes more than linear time to parse
+- a corrupt or hostile local store costs grouping, never sense, and no key from
+  a file can reach `Object.prototype`
+- the manifest asks for one permission (`storage`) and two hosts, declares
+  nothing web-accessible, and lets no page talk to the extension
+
+The searching half of that is the point, not the passing half. Two findings
+from its first run are fixed and in the scars — and so is the fact that two of
+its own probes were silently dead, because `` is a valid escape in Python and
+became a backspace byte.
+
+## Getting your own work out
+
+Your **notes**, the repos you put on a shelf **by hand**, and your **pins** are
+the only things here nothing can rebuild — no rescan re-derives a sentence you
+wrote. They live in `chrome.storage.local` and nowhere else, deliberately:
+they are too big for synced storage, and a credential's neighbours do not
+belong there either. Which also means a profile reset, a new laptop or one
+mis-click on *Remove extension* takes all three.
+
+Options → **Your own work** → *Export…* writes them to a JSON file. *Import…*
+reads one back.
+
+Two things about it, both deliberate:
+
+- **It merges, and the incumbent wins.** Where both sides know a repository,
+  the note already in this browser stays. Importing is what you do when you are
+  worried about losing something, and a silent overwrite of the sentence you
+  wrote this morning is the one unrecoverable thing this extension could do.
+  The result is counted — `12 added, 3 already here and left alone` — so
+  "nothing happened" and "you already had all of it" are different sentences.
+- **The token is not in it.** The file is something you are invited to move
+  between machines; a credential is not.
+
+A file is the most untrusted input SHELVES takes — the only one that does not
+arrive through GitHub — so a key that does not name a repository, or a value of
+the wrong shape, is refused and counted rather than stored. `redteam.js`'s
+`import` plugin is that assertion.
 
 ## What it stores
 
