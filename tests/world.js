@@ -46,10 +46,18 @@ function row(owner, name, topics) {
   );
 }
 
+/* WHO IS SIGNED IN. GitHub has shipped <meta name="user-login"> for years, and
+   without it in the fixture `isMine()` answers "cannot tell -> treat as yours",
+   which is the correct degradation and also means the whole ownership guard
+   goes untested. A world that never signs anybody in cannot see it. */
+function viewerMeta(viewer) {
+  return viewer ? `<meta name="user-login" content="${viewer}">` : "";
+}
+
 /** The profile Repositories tab. `next` renders a pagination link. */
-function profilePage(owner, repos, next) {
+function profilePage(owner, repos, next, viewer) {
   const items = repos.map((r) => row(owner, r.name, r.chips)).join("");
-  return `<!doctype html><html><body>
+  return `<!doctype html><html><head>${viewerMeta(viewer)}</head><body>
     <div id="user-repositories-list">
       <ul class="repo-list" data-filterable-for="your-repos-filter">${items}</ul>
       <div class="paginate-container">${
@@ -85,6 +93,7 @@ function repoPage(repo, owner, name) {
   const sideClass = r.sidebarClass || (r.broken ? "AboutPanel" : "Layout-sidebar");
   return `<!doctype html><html><head>
     ${metaDesc && !r.broken ? `<meta name="description" content="${metaDesc}">` : ""}
+    ${viewerMeta(r.viewer)}
   </head><body>
     <div class="${sideClass}">
       ${r.noAbout ? "" : "<h2>About</h2>"}
@@ -177,6 +186,9 @@ function bootWorker(fetchImpl, counters) {
 /**
  * @param {object} opts
  *   owner       profile being viewed
+ *   viewer      who is SIGNED IN (<meta name="user-login">). Omit and the
+ *               ownership guard reads "cannot tell" and stands down, which is
+ *               the pre-fix behaviour — set it to test the guard at all
  *   at          "owner/name" to stand on a REPO PAGE instead of the profile
  *               tab; `repos` then describes what exists on this fake GitHub
  *               (what a fetch can resolve) rather than what is listed
@@ -210,8 +222,11 @@ function build(opts) {
     ? `https://github.com/${at}`
     : `https://github.com/${owner}?tab=repositories`;
   const html = at
-    ? repoPage(opts.page || {}, at.split("/")[0], at.split("/")[1])
-    : profilePage(owner, opts.repos, opts.page2 ? "/" + owner + "?tab=repositories&page=2" : "");
+    ? repoPage({ ...(opts.page || {}), viewer: opts.viewer },
+               at.split("/")[0], at.split("/")[1])
+    : profilePage(owner, opts.repos,
+                  opts.page2 ? "/" + owner + "?tab=repositories&page=2" : "",
+                  opts.viewer);
 
   const dom = new JSDOM(html, {
     url,
@@ -259,7 +274,8 @@ function build(opts) {
     const u = String(url);
     if (/[?&]page=2/.test(u)) {
       counters.pages.push(u);
-      return { ok: true, status: 200, text: async () => profilePage(owner, opts.page2, "") };
+      return { ok: true, status: 200,
+               text: async () => profilePage(owner, opts.page2, "", opts.viewer) };
     }
     const name = u.replace(/^https?:\/\/github\.com/, "").replace(/^\//, "").toLowerCase();
     const all = (opts.repos || []).concat(opts.page2 || []);

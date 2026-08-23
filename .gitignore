@@ -4,3 +4,11 @@ tests/package-lock.json
 *.zip
 .DS_Store
 .greenhouse/tendings/
+
+# Local agent + build state. `.claude/settings.json` carried an absolute hook
+# path into this machine's home directory (including a folder named `secret`),
+# which is nobody else's business and broken for everyone else anyway.
+# `proofs.json` is a receipts cache the greenhouse rebuilds on demand.
+.claude/
+.greenhouse/proofs.json
+

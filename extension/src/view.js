@@ -215,7 +215,17 @@ globalThis.Shelves = globalThis.Shelves || {};
       return;
     }
     li.dataset.shMargin = "1";
-    place(column(li), S.noteMarker(name, note, handlers));
+    const col = column(li);
+    /* THE FALLBACK'S CSS IS SCOPED TO THE FALLBACK. `flex-wrap: wrap` and a
+     * 100%-basis child are what stop an unrecognised row from being crushed —
+     * but they were applied to EVERY row in the host, including the great
+     * majority where the margin went safely into a text column and no wrapping
+     * was ever needed. That is a change to GitHub's own flex layout made far
+     * beyond where it does any good, which is precisely what principle V says
+     * not to do: move the DOM, do not rebuild it, and do not restyle rows you
+     * are not touching. The flag marks the rows that genuinely need it. */
+    if (col === li) li.dataset.shLoose = "1";
+    place(col, S.noteMarker(name, note, handlers));
   }
 
   /* UNDER THE DESCRIPTION, NOT AFTER THE ROW. A note is commentary on the repo

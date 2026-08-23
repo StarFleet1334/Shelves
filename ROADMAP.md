@@ -42,10 +42,25 @@ rather than guessed:
 - [x] THE CANARY — a moved selector is SAID rather than silently absorbed: the anchors each parse could find are tallied, and below five pages read there is deliberately no opinion `proof: node tests/harness.js canary`
 - [ ] drive `facts.js` against a REAL logged-in repo page and demote anything that does not read — only `topics` and `description` are measured; the other eight prefer <meta> and href shapes over class names, which is a hedge, not a proof `proof: node tests/harness.js real-page`
 
+## Hardened for release
+
+Found by a pre-publication security review of the whole repository, each one
+measured before and after rather than reasoned about. These are not features and
+they were not on this list; they are here because the proof discipline is the
+same and a fix nobody can re-run is a fix nobody can trust.
+
+- [x] THE READER'S CREDENTIALS ARE SPENT ON THE READER'S OWN PAGES ONLY — nothing anywhere asked *whose* profile was open, so a stranger's Repositories tab sent the reader's Bearer token to an endpoint answering with the reader's own repos, then fetched every one of the stranger's repo pages with the reader's cookie and cached them permanently. Measured at 12 repos; a 600-repo profile is 600 authenticated requests for one click on a link. Now: free rungs only off your own profile — 0 token, 0 scrapes, 0 cache writes, still shelved `proof: node tests/harness.js credentials`
+- [x] STOP WHEN GITHUB SAYS STOP — `scrape()` is the highest-volume path in the extension and was the only one with no backoff. Measured against a server answering 429 to everything: 40 of 40 requests issued, and a page of Ungrouped repos with no explanation. Now 6 of 40 (one wave of in-flight requests) and a toolbar that names the status, the count and the cure `proof: node tests/harness.js unread`
+- [x] A PAGE-SUPPLIED HREF IS NOT A URL TO FETCH — two path segments went from the page straight into `fetch("/" + name)`. No SSRF (the leading slash contained every crafted form to github.com), but `/settings/tokens/x` resolved to an authenticated GET of the reader's own token page, cached and made searchable in their UI. Now validated, with the route deny-list reused `proof: node tests/harness.js untrusted-names`
+- [x] THE FACT CACHE IS NOT IMMORTAL — there was no eviction path anywhere, so one visit to a stranger's profile left the top-up refreshing their repositories forever. Now pruned by age (four TTLs, at least 90 days) and capped at 3 000, newest kept `proof: node tests/harness.js forgets`
+- [x] THE VOCABULARY SCAN WAS QUADRATIC AND RAN ON EVERY RENDER — 25 s of blocked main thread on a synthetic 600-repo account, opened or not, because the badge needs it. Two indexes replaced the pairwise scan: 45 ms at 9 000 topics, and the reported lists are capped with the truncation stated `proof: node tests/harness.js vocabulary`
+- [x] THE CHARTER PROMISED SOMETHING THE CODE CONTRADICTED — *"never stores your repositories anywhere"* stopped being true at `facts.js`, which caches descriptions, READMEs and private repo names. Corrected in the charter and the README, in full, rather than softened `proof: node tests/harness.js packaging`
+- [x] a narrower content-script surface (`exclude_matches` off `/settings/*` and the auth routes), `.claude/` and the proofs cache untracked, and an MIT LICENSE — a repo with none is not legally reusable, which the extension's own audit panel had been saying about it `proof: node tests/harness.js packaging`
+
 ## The ladder must be honest
 
 - [ ] **LIVE, no longer latent.** the ladder answers PER REPO, not per page — chips found on some rows are a floor, and the repos they did not answer still climb to the API and the repo pages. Observed 2026-08-22: GitHub now renders chips in the profile list, so a 77-repo account resolved `via page` on 9 rows and left 68 in Ungrouped for zero requests `proof: node tests/harness.js ladder-floor`
-- [ ] a repo page that could not be read is SAID, not silently Ungrouped — the toolbar counts them (`3 unread`) and names rescan as the cure `proof: node tests/harness.js unread`
+- [x] a repo page that could not be read is SAID, not silently Ungrouped — the toolbar counts them (`3 unread`) and names rescan as the cure. Landed with the rate-limit backoff, because they are the same silence `proof: node tests/harness.js unread`
 - [ ] a rejected token falls back to the UNAUTHENTICATED api before scraping 76 pages, and the source line says which of the two answered `proof: node tests/harness.js token-fallback`
 - [ ] the scrape path has a ceiling and a *continue* — above `scrapeMax` repos it reads that many, says how many are left and offers to read the rest, so 400 untagged repos is a choice rather than 400 requests `proof: node tests/harness.js ceiling`
 

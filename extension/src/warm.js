@@ -115,7 +115,7 @@ globalThis.Shelves = globalThis.Shelves || {};
       await sleep(o.gap == null ? GAP_MS : o.gap);
     }
 
-    if (warmed) await S.cache.write(cache);
+    if (warmed) await S.cache.write(cache, settings);
     return { warmed, why: why || "topped up " + warmed + " of " + due.length };
   };
 

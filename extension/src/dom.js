@@ -93,6 +93,32 @@ globalThis.Shelves = globalThis.Shelves || {};
     return Array.prototype.filter.call(ul.children, (n) => n.tagName === "LI");
   };
 
+  /* ---- names are page input, and page input is not trusted ---------------
+   * `fullNameOf` reads two path segments off an href the PAGE supplied, and
+   * that string goes straight into `fetch("/" + name)` in three files. The
+   * leading slash contains it — every crafted form measured stayed on
+   * github.com, so there is no SSRF here — but it does not contain WHICH
+   * github.com path, and `/settings/tokens/x` resolved cleanly to
+   * `github.com/settings/tokens`: an authenticated GET of a sensitive page,
+   * whose text would then be cached and made searchable in the reader's own
+   * UI. Nothing leaves the browser, so this is a capability that should not
+   * exist rather than a breach — and it costs one regex to remove.
+   *
+   * A rejected name costs that row its shelf and nothing else (P.III), which
+   * is the right failure: an owner spelled in some way GitHub allows and this
+   * pattern does not is one unshelved repo, never a broken page. */
+  const OWNER_RE = /^[a-z0-9][a-z0-9._-]*$/;
+  const REPO_RE = /^[a-z0-9._-]+$/;
+
+  S.safeRepo = function safeRepo(owner, repo) {
+    const o = String(owner || "").toLowerCase();
+    const r = String(repo || "").toLowerCase();
+    if (!OWNER_RE.test(o) || !REPO_RE.test(r)) return "";
+    if (RESERVED.has(o)) return "";          // /settings/tokens and friends
+    if (r === "." || r === "..") return "";
+    return o + "/" + r;
+  };
+
   /** "owner/name", lowercased — the key every topic source is keyed by. */
   S.fullNameOf = function fullNameOf(li) {
     const a =
@@ -101,7 +127,41 @@ globalThis.Shelves = globalThis.Shelves || {};
       li.querySelector('a[href^="/"]');
     if (!a) return "";
     const parts = (a.getAttribute("href") || "").split("/").filter(Boolean);
-    return parts.length >= 2 ? (parts[0] + "/" + parts[1]).toLowerCase() : "";
+    return parts.length >= 2 ? S.safeRepo(parts[0], parts[1]) : "";
+  };
+
+  /* ---- whose profile is this? --------------------------------------------
+   * MEASURED, and it is the sharpest finding in the pre-publication review:
+   * `isRepoTab()` tests the URL shape and the `tab` param, and NOTHING
+   * anywhere asked whose profile it was. Opening a stranger's Repositories tab
+   * therefore sent the reader's own Bearer token to the API — which answers
+   * with the READER's repos, useless on that page — and then fetched every one
+   * of the stranger's repo pages with the reader's session cookie, caching
+   * them permanently. One click on a link, six hundred authenticated requests,
+   * and a cache that the background top-up then refreshes forever.
+   *
+   * UNKNOWN COUNTS AS MINE. If the meta moves, answering "not yours" would
+   * disable the extension for everybody at once; answering "yours" restores
+   * exactly today's behaviour for the one case we cannot read. Principle III
+   * says a missing input costs a feature, never the page. */
+  S.viewer = function viewer(doc) {
+    doc = doc || document;
+    const metas = ["user-login", "octolytics-actor-login"];
+    for (const n of metas) {
+      const m = doc.querySelector('meta[name="' + n + '"]');
+      const v = m && String(m.getAttribute("content") || "").trim().toLowerCase();
+      if (v) return v;
+    }
+    // the header avatar carries it too, and has outlived several markup changes
+    const av = doc.querySelector("[data-login]");
+    const d = av && String(av.getAttribute("data-login") || "").trim().toLowerCase();
+    return d || "";
+  };
+
+  S.isMine = function isMine(loc, doc) {
+    const who = S.viewer(doc);
+    if (!who) return true;                   // cannot tell: behave as before
+    return who === S.owner(loc);
   };
 
   /* MEASURED (charter §5): GitHub lowercases topics, so every topic in the

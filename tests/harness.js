@@ -400,6 +400,14 @@ const SCENARIOS = [
        description to 94px. Where the row has a content column, the margin must
        be in it — that much is structure, and structure is checkable here.
        tests/row-layout.html is where the pixels get checked. */
+    /* AND THE FALLBACK'S CSS MUST NOT REACH ROWS THAT DID NOT USE IT. The flag
+       is what scopes `flex-wrap: wrap` to the unrecognised-markup case; without
+       it every row on the page had GitHub's own flex layout rewritten for the
+       benefit of the few that needed it. */
+    const loose = w.win.document.querySelectorAll("#shelves-host li[data-sh-loose]");
+    assert(ctx, loose.length === 0,
+      "a row with a proper text column must not be flagged loose, got " + loose.length);
+
     const stray = w.win.document.querySelectorAll("#shelves-host li > .sh-margin");
     assert(ctx, stray.length === 0,
       "the margin must live in the row's text column, not beside it — " +
@@ -519,7 +527,23 @@ const SCENARIOS = [
     assert(ctx, v.visible.join() === "gamma",
       "pressing a topic filters the page to its repos, got: " + v.visible.join());
 
-    ctx.info = p.badge + " findings over " + p.terms.length + " topics";
+    /* THE SUSPICION PASS USED TO BE O(k^2) AND RAN ON EVERY RENDER, opened or
+       not, because the badge needs it. Measured before the fix: 330 ms at
+       1 000 distinct topics, 1.3 s at 2 000, 5.2 s at 4 000, 25 s on a
+       synthetic 600-repo account - a frozen tab, on exactly the accounts this
+       extension is for. Two indexes replaced the pairwise scan; this pins it. */
+    const many = Array.from({ length: 600 }, (_, i) =>
+      Array.from({ length: 5 }, (_, j) => "topic-name-" + ((i * 5 + j) % 3000)));
+    const t0 = Date.now();
+    const big = w.win.Shelves.vocabulary(many, many.map((_, i) => "o/r" + i));
+    const ms = Date.now() - t0;
+    assert(ctx, ms < 400, "3000 topics must resolve in well under a frame budget, took " + ms + " ms");
+    assert(ctx, big.near.length <= 40 && big.terms.length <= 200,
+      "and the LISTS are capped too, or the DOM becomes the next unbounded thing");
+    assert(ctx, big.nearMore > 0 && big.termsMore > 0,
+      "with the truncation counted, never silent");
+
+    ctx.info = p.badge + " findings over " + p.terms.length + " topics · 3000 topics in " + ms + " ms";
   }),
 
   check("audit - what is missing from the REPOS, honestly denominated", async (ctx) => {
@@ -890,6 +914,283 @@ const SCENARIOS = [
     assert(ctx, readShelves(ok.win).canary === "",
       "an intact page must be silent, got: " + readShelves(ok.win).canary);
     ctx.info = "6 broken pages named; 4 below the floor; a healthy run quiet";
+  }),
+
+  check("credentials - the reader's token and session are spent on the reader's " +
+        "own pages only", async (ctx) => {
+    /* MEASURED BEFORE THE FIX, on a stranger's profile with the reader's own
+       token: 1 API call carrying the reader's Bearer, 12 of the stranger's repo
+       pages fetched with the reader's cookie, and 12 entries written to the
+       reader's cache — which the background top-up then refreshes forever. One
+       click on a link. This scenario is that measurement, inverted. */
+    const strangers = Array.from({ length: 8 }, (_, i) => ({
+      name: "theirs-" + i, topics: ["aiproject"], private: false,
+    }));
+    const away = build({
+      viewer: "me",                       // signed in as...
+      owner: "some-stranger",             // ...looking at someone else
+      token: "github_pat_THE_READERS_OWN",
+      settings: { groups: ["aiproject"] },
+      repos: strangers,
+      apiRepos: [],                       // API answers nothing -> rung 4 would fire
+    });
+    await settle(1500);
+    const v = away.win.Shelves;
+    assert(ctx, v.isMine() === false, "the guard must see this is not the reader's profile");
+
+    assert(ctx, away.counters.lastAuth === false,
+      "the reader's token must NOT be sent to a page it cannot answer for");
+    assert(ctx, away.counters.scraped.length === 0,
+      "and no repo page of theirs may be fetched with the reader's cookie, got " +
+      away.counters.scraped.length);
+    assert(ctx, Object.keys(away.store.local.repoFacts || {}).length === 0,
+      "and nothing of theirs may enter the reader's cache");
+
+    /* A NARROWING, NOT A REFUSAL. The free rungs still run, so the page is
+       still shelved - and P.IV means the toolbar says which rungs answered. */
+    const view = readShelves(away.win);
+    assert(ctx, view, "a stranger's profile must still render");
+    assert(ctx, view && /not yours/.test(view.note),
+      "the source line says so, got: " + (view || {}).note);
+    assert(ctx, view && /free rungs only/.test(view.warn),
+      "and the warning explains the narrowing, got: " + (view || {}).warn);
+
+    // ...and on the reader's OWN profile nothing has changed.
+    const home = build({
+      viewer: "me", owner: "me", token: "github_pat_THE_READERS_OWN",
+      settings: { groups: ["aiproject"] },
+      repos: [{ name: "mine", topics: ["aiproject"], private: true }],
+      apiRepos: [{ name: "mine", topics: ["aiproject"], private: true }],
+    });
+    await settle();
+    assert(ctx, home.win.Shelves.isMine() === true, "the reader's own profile is theirs");
+    assert(ctx, home.counters.lastAuth === true,
+      "and the token is still sent where it can actually answer");
+
+    /* UNKNOWN COUNTS AS MINE. If the meta ever moves, answering "not yours"
+       would disable the extension for everybody at once. */
+    const blind = build({
+      owner: "whoever", token: "github_pat_X",       // no viewer meta at all
+      settings: { groups: ["aiproject"] },
+      repos: [{ name: "r", topics: ["aiproject"], private: true }],
+      apiRepos: [],
+    });
+    await settle(1200);
+    assert(ctx, blind.win.Shelves.isMine() === true,
+      "an unreadable viewer must degrade to the old behaviour, not to nothing");
+
+    /* The chip is about the reader's OWN shelves; on someone else's repository
+       it would answer a question nobody asked. */
+    const theirRepo = build({
+      viewer: "me", at: "some-stranger/thing",
+      settings: { groups: ["aiproject"] },
+      page: { topics: ["aiproject"], viewer: "me" },
+    });
+    await settle();
+    assert(ctx, readMark(theirRepo.win) === null,
+      "no shelf chip on a repository that is not the reader's");
+    ctx.info = "stranger: 0 token, 0 scrapes, 0 cache writes, still shelved";
+  }),
+
+  check("backoff and unread - GitHub says stop, and the reader is told", async (ctx) => {
+    const w = build({
+      viewer: "me", owner: "me",
+      settings: { groups: ["keep"], concurrency: 3 },
+      apiRepos: [],
+      repos: Array.from({ length: 30 }, (_, i) => ({ name: "r" + i, topics: [] })),
+    });
+    /* Swapped in before the ladder reaches rung 4 - the run starts ~120ms in. */
+    let asked = 0;
+    w.win.fetch = async () => { asked++; return { ok: false, status: 429, text: async () => "" }; };
+    await settle(2000);
+
+    /* MEASURED BEFORE THE FIX: 40 of 40 requests issued against a server saying
+       stop, and a page of Ungrouped repos with no explanation at all. This is
+       the extension's highest-volume path and was the only one without a
+       backoff, while warm.js - which makes six requests - had one. */
+    assert(ctx, asked > 0 && asked <= 6,
+      "it must stop within one wave of in-flight requests, issued " + asked + " of 30");
+
+    const v = readShelves(w.win);
+    assert(ctx, v, "a rate limit must never cost the render");
+    if (!v) return;
+    assert(ctx, /429/.test(v.warn) && /unread/.test(v.warn),
+      "and the reader is told what happened and how many, got: " + JSON.stringify(v.warn));
+    assert(ctx, /rescan/.test(v.warn), "with the cure named, got: " + v.warn);
+    const total = v.shelves.reduce((n, sh) => n + sh.count, 0);
+    assert(ctx, total === 30, "every repo is still on the page, got " + total);
+
+    /* A RATE LIMIT IS NOT THE ONLY WAY TO GO UNREAD. A 404, a network blip or
+       a repo that vanished mid-run all end the same way — Ungrouped — and a
+       reader cannot tell that from untagged by looking. The count is over
+       everything that failed, not just the refusals. */
+    const w2 = build({
+      viewer: "me", owner: "me",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      repos: Array.from({ length: 6 }, (_, i) => ({ name: "q" + i, topics: [] })),
+    });
+    let n = 0;
+    const pass = w2.win.fetch;
+    w2.win.fetch = async (u) => (++n <= 2
+      ? { ok: false, status: 404, text: async () => "" }
+      : pass(u));
+    await settle(1600);
+    const v2 = readShelves(w2.win);
+    assert(ctx, v2 && /unread/.test(v2.warn),
+      "unreadable repos are counted even with no rate limit, got: " +
+      JSON.stringify((v2 || {}).warn));
+    assert(ctx, v2 && !/429/.test(v2.warn),
+      "and not blamed on a refusal that did not happen, got: " + (v2 || {}).warn);
+    ctx.info = asked + " requests before stopping, of 30 · " + v.warn;
+  }),
+
+  check("untrusted-names - a page-supplied href is not a URL to fetch",
+    async (ctx) => {
+      const w = build({
+        viewer: "me", owner: "me", settings: { groups: [] },
+        repos: [{ name: "ok", topics: [] }], apiRepos: [],
+      });
+      await settle();
+      const safe = w.win.Shelves.safeRepo;
+
+      /* `fullNameOf` reads two path segments off an href the PAGE supplied, and
+         that string goes into `fetch("/" + name)` in three files. The leading
+         slash contains it to github.com - measured, no SSRF - but it does not
+         contain WHICH github.com path: `/settings/tokens/x` resolved cleanly to
+         an authenticated GET of the reader's token page, whose text would then
+         be cached and made searchable in their own UI. */
+      const good = [["octo", "repo"], ["octo", ".github"], ["o-1", "a_b.c-d"]];
+      good.forEach(([o, r]) =>
+        assert(ctx, safe(o, r) === o + "/" + r, "must accept " + o + "/" + r));
+
+      const bad = [
+        ["settings", "tokens"], ["https:", "evil.example"], ["octo", "repo?x=1"],
+        ["..", ".."], ["octo", ".."], ["__proto__", "x"], ["octo", "a/b"],
+        ["octo", "n%0d%0aX"], ["orgs", "acme"], ["", "x"], ["octo", ""],
+      ];
+      bad.forEach(([o, r]) =>
+        assert(ctx, safe(o, r) === "",
+          "must reject " + JSON.stringify(o + "/" + r) + ", got " + JSON.stringify(safe(o, r))));
+
+      /* ...and a crafted row on a real page is simply not fetched. */
+      const w2 = build({
+        viewer: "me", owner: "me", settings: { groups: [] }, apiRepos: [],
+        repos: [{ name: "real", topics: [] }],
+      });
+      await settle();
+      const li = w2.win.document.querySelector("#shelves-host li");
+      assert(ctx, li && li.dataset.shName === "me/real",
+        "a legitimate row keeps its name, got: " + (li && li.dataset.shName));
+      ctx.info = good.length + " accepted, " + bad.length + " rejected";
+    }),
+
+  check("forgets - the fact cache is not immortal", async (ctx) => {
+    const w = build({ viewer: "me", owner: "me", settings: {}, repos: [], apiRepos: [] });
+    await settle();
+    const C = w.win.Shelves.cache;
+    const day = 86400000;
+    const now = Date.now();
+
+    /* THERE WAS NO EVICTION PATH IN THE WHOLE EXTENSION. An entry written once
+       lived forever, and warm.js refreshes everything it finds - so one visit
+       to a stranger's 300-repo profile left the browser re-fetching somebody
+       else's repositories for as long as the extension was installed. */
+    const cache = {
+      "o/fresh": { at: now - day, topics: [] },
+      "o/aging": { at: now - 60 * day, topics: [] },
+      "o/ancient": { at: now - 400 * day, topics: [] },
+      "o/undated": { topics: [] },
+    };
+    const kept = C.prune(cache, { cacheDays: 7 }, now);
+    assert(ctx, "o/fresh" in kept && "o/aging" in kept,
+      "anything inside the window survives, got: " + Object.keys(kept).join());
+    assert(ctx, !("o/ancient" in kept), "a year-old entry is dropped");
+    assert(ctx, !("o/undated" in kept), "and one with no timestamp cannot be judged fresh");
+
+    /* The floor is generous on purpose: pruning at the TTL would fight the
+       top-up, which exists to refresh things around it. */
+    const long = C.prune({ "o/x": { at: now - 200 * day } }, { cacheDays: 90 }, now);
+    assert(ctx, "o/x" in long,
+      "a 90-day TTL must not have its own entries pruned at 90 days");
+
+    // and a count cap for the case age cannot catch
+    const many = {};
+    for (let i = 0; i < 3200; i++) many["o/r" + i] = { at: now - i * 1000 };
+    const capped = C.prune(many, { cacheDays: 7 }, now);
+    assert(ctx, Object.keys(capped).length === 3000,
+      "capped at 3000, got " + Object.keys(capped).length);
+    assert(ctx, "o/r0" in capped && !("o/r3199" in capped),
+      "keeping the newest, which are the ones being looked at");
+    ctx.info = "age + count, and the newest survive";
+  }),
+
+  check("packaging - what actually ships, and what it promises", async (ctx) => {
+    /* THE ONLY SCENARIO THAT READS THE REPOSITORY RATHER THAN DRIVING IT.
+       Everything else here proves the code behaves; this proves the package
+       around it does — because a `exclude_matches` somebody deletes and a
+       charter sentence that goes stale are both regressions, and neither one
+       would fail a single test above. */
+    const fs = require("fs");
+    const path = require("path");
+    const root = path.join(__dirname, "..");
+    const read = (f) => fs.readFileSync(path.join(root, f), "utf8");
+
+    const m = JSON.parse(read("extension/manifest.json"));
+    assert(ctx, Object.keys(m.permissions || []).length >= 0 &&
+      JSON.stringify(m.permissions) === '["storage"]',
+      "one permission, and it is storage, got: " + JSON.stringify(m.permissions));
+    assert(ctx, JSON.stringify(m.host_permissions) ===
+      '["https://github.com/*","https://api.github.com/*"]',
+      "two hosts, both GitHub, got: " + JSON.stringify(m.host_permissions));
+    assert(ctx, !m.externally_connectable && !m.web_accessible_resources,
+      "nothing on the outside may reach in");
+
+    /* GitHub keeps its most sensitive state on these routes, and a content
+       script has no business reading them even if it never transmits. */
+    const ex = (m.content_scripts[0].exclude_matches || []).join(" ");
+    ["settings", "sessions", "login", "account"].forEach((r) =>
+      assert(ctx, ex.indexOf(r) !== -1, "the content script must stand off /" + r));
+
+    assert(ctx, /MIT License/.test(read("LICENSE")),
+      "a repo with no licence is not legally reusable by anyone — including " +
+      "the one this extension's own audit panel keeps saying it about");
+
+    const ignored = read(".gitignore");
+    [".claude/", "proofs.json", "node_modules/"].forEach((f) =>
+      assert(ctx, ignored.indexOf(f) !== -1, ".gitignore must exclude " + f));
+
+    /* A PROMISE THE CODE CONTRADICTS IS WORSE THAN NO PROMISE. That sentence
+       was true while the cache held topics and false from facts.js onward,
+       which caches descriptions, README openings and private repo names.
+       Whitespace-normalised, because it was line-wrapped and a reflowed
+       paragraph must not smuggle it back in. */
+    const charter = read("CHARTER.md").replace(/\s+/g, " ");
+    const claim = "never stores your repositories anywhere";
+    const at = charter.indexOf(claim);
+    /* IT MAY APPEAR EXACTLY ONCE, AND ONLY AS A QUOTATION OF ITSELF. The first
+       version of this test asserted the sentence was simply absent, and failed
+       — correctly, and for an interesting reason. The charter SHOULD still
+       carry it, inside the paragraph explaining that it stopped being true:
+       deleting a retired promise hides the correction as thoroughly as never
+       making it. What must never come back is the sentence standing alone as a
+       claim. */
+    assert(ctx, at !== -1 && charter.indexOf(claim, at + 1) === -1,
+      "the retired promise must appear exactly once, found " +
+      (at === -1 ? "none" : "more than one"));
+    assert(ctx, /An earlier version of this paragraph said/.test(
+      charter.slice(Math.max(0, at - 140), at)),
+      "and only as a quotation inside the correction, never as a promise");
+    ["chrome.storage.local", "unencrypted", "private"].forEach((w) =>
+      assert(ctx, charter.indexOf(w) !== -1,
+        "and the charter must say what IS kept — missing: " + w));
+
+    const readme = read("README.md");
+    assert(ctx, /What it stores/.test(readme),
+      "the README must carry the same statement, in its own words");
+    ctx.info = "1 permission, 2 hosts, " +
+      (m.content_scripts[0].exclude_matches || []).length +
+      " excluded routes, MIT, and the storage claim is honest";
   }),
 
   check("identity - a colour and a glyph per shelf, derived and stable", async (ctx) => {

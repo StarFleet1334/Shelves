@@ -35,6 +35,7 @@ globalThis.Shelves = globalThis.Shelves || {};
   const FACTS_KEY = "repoFacts";
   const NOTES_KEY = "notes";
   const MAP_KEY = "shelfMap";
+  const MAX_FACTS = 3000;   // far above any real account, far below the quota
 
   const api = () =>
     (typeof chrome !== "undefined" && chrome && chrome.storage) ? chrome.storage : null;
@@ -114,8 +115,35 @@ globalThis.Shelves = globalThis.Shelves || {};
       const old = got[CACHE_KEY];
       return old && typeof old === "object" ? old : {};
     },
-    write(cache) {
-      return set("local", { [FACTS_KEY]: cache });
+    /* IT NEVER FORGOT ANYTHING, AND THAT WAS THE BUG. There was no eviction
+     * path in the whole extension: an entry written once lived forever, and
+     * `warm.js` refreshes everything it finds — so a single visit to a
+     * stranger's 300-repo profile left the reader's browser quietly
+     * re-fetching somebody else's repositories for as long as the extension
+     * was installed. The profile narrowing above stops those entries being
+     * written; this stops the ones already there from being immortal.
+     *
+     * The floors are generous on purpose. Pruning at the TTL would fight the
+     * top-up, which exists precisely to refresh things around it, so an entry
+     * has to be untouched for four TTLs (and at least 90 days) before it goes.
+     * The count cap is the backstop for the case age cannot catch: 3000 is far
+     * above any real account and far below anything that would strain the
+     * quota. Newest survive, because those are the ones being looked at. */
+    write(cache, settings) {
+      return set("local", { [FACTS_KEY]: S.cache.prune(cache, settings) });
+    },
+    prune(cache, settings, now) {
+      const c = cache && typeof cache === "object" ? cache : {};
+      const days = Math.max(90, (Number((settings || {}).cacheDays) || 7) * 4);
+      const cut = (now || Date.now()) - days * 86400000;
+      let rows = Object.keys(c)
+        .map((k) => [k, (c[k] && c[k].at) || 0])
+        .filter(([, at]) => at > cut)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, MAX_FACTS);
+      const out = {};
+      rows.forEach(([k]) => { out[k] = c[k]; });
+      return out;
     },
     /* Rescan forgets what it can rebuild and NOTHING ELSE. The notes below are
      * the user's own words: no request re-derives them, so nothing here is

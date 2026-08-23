@@ -183,6 +183,11 @@ globalThis.Shelves = globalThis.Shelves || {};
    */
   S.markRepoPage = async function markRepoPage() {
     if (!S.isRepoPage()) return false;
+    /* THE CHIP IS ABOUT THE READER'S OWN SHELVES. On somebody else's
+     * repository it would answer a question nobody asked — "which of YOUR
+     * shelves would this land on" — by reading your settings and your cache on
+     * a page that has nothing to do with either. */
+    if (!S.isMine()) return false;
     if (document.getElementById(CHIP_ID)) return false;
 
     const name = S.pageRepo();

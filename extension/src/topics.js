@@ -66,12 +66,27 @@ globalThis.Shelves = globalThis.Shelves || {};
     }
 
     let done = 0;
+    let read = 0;
+    let halted = 0;          // the status GitHub stopped us with, if any
     if (onProgress) onProgress(0, todo.length);
 
     await pool(todo, settings.concurrency, async (name) => {
+      /* STOP WHEN GITHUB SAYS STOP. Measured against a server answering 429 to
+       * everything: this loop issued all forty requests anyway, and showed the
+       * reader a page of Ungrouped repos with no explanation at all. It is the
+       * highest-volume path in the extension — hundreds of authenticated
+       * same-origin fetches — and it was the only one with no backoff, while
+       * warm.js, which makes six, had one. That asymmetry is how a convenience
+       * gets somebody rate-limited on their own account. */
+      if (halted) return;
       try {
         const res = await fetch("/" + name, { credentials: "same-origin" });
+        if (res.status === 429 || res.status === 403) {
+          halted = res.status;
+          return;
+        }
         if (res.ok) {
+          read++;
           const doc = new DOMParser().parseFromString(await res.text(), "text/html");
           /* ONE PARSE, TEN FACTS (facts.js). Topics are still scoped to the
            * sidebar in there, so a README full of /topics/ links cannot lie;
@@ -99,8 +114,11 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
 
     // Pay once, remember it (P.VIII).
-    if (todo.length) await S.cache.write(cache);
-    return { found, fetched: todo.length, seen };
+    if (read) await S.cache.write(cache, settings);
+    return {
+      found, fetched: todo.length, seen, halted,
+      unread: todo.length - read,
+    };
   }
 
   /**
@@ -116,6 +134,24 @@ globalThis.Shelves = globalThis.Shelves || {};
     let facts = names.map((n, i) => ({ name: n, topics: topics[i], via: "page-chips" }));
     const answered = () => topics.filter((t) => t.length).length;
 
+    /* ── WHOSE PROFILE IS THIS ──────────────────────────────────────────────
+     * On somebody else's Repositories tab the two expensive rungs are not just
+     * costly, they are WRONG:
+     *
+     *   the token answers `/user/repos` — the reader's OWN repositories, which
+     *     tell you nothing about the page you are standing on, and send a
+     *     credential to a request that cannot use it;
+     *   rung 4 fetches every one of a stranger's repo pages with the reader's
+     *     session cookie and caches them permanently, so one click on a link
+     *     costs hundreds of authenticated requests and a cache the background
+     *     top-up then refreshes forever.
+     *
+     * So a stranger's profile gets the FREE rungs only: page chips, plus the
+     * public API for their username. That is one or two requests, no
+     * credential, no scraping and no cache write — and it still shelves the
+     * page, which is why this is a narrowing rather than a refusal. */
+    const mine = S.isMine();
+
     // Rung 1 — the page itself.
     if (answered() > 0) {
       return { topics, facts, source: "page", warning: "", health: "" };
@@ -127,7 +163,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     const reply = await askWorker({
       type: "repos",
       user: S.owner(),
-      token: settings.token || "",
+      token: mine ? (settings.token || "") : "",
     });
 
     const byName = new Map();
@@ -135,7 +171,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     facts = names.map((n, i) => byName.get(n) || { name: n, topics: [] });
     topics = facts.map((f) => f.topics || []);
 
-    if (settings.token) {
+    if (mine && settings.token) {
       source = "api (token)";
       /* A pasted token that has expired must be SAID, not silently ignored:
        * the user cannot otherwise tell an expired credential from an untagged
@@ -154,9 +190,27 @@ globalThis.Shelves = globalThis.Shelves || {};
     // Rung 4 — whatever the API could not see. Private repos land here.
     let health = "";
     const missing = names.filter((n, i) => n && !topics[i].length && !byName.has(n));
+
+    /* The whole cost of the ladder is here, and it is spent on the reader's
+     * own session. It is not spent on anyone else's profile. */
+    if (missing.length && !mine) {
+      warning = warning || ("someone else's profile — free rungs only, " +
+                            missing.length + " unread");
+      return { topics, facts, source: source + " · not yours", warning, health: "" };
+    }
+
     if (missing.length) {
-      const { found, fetched, seen } = await scrape(missing, settings, onProgress);
+      const { found, fetched, seen, halted, unread } =
+        await scrape(missing, settings, onProgress);
       health = S.pageHealth(seen);
+      /* P.IV — an unread repo is Ungrouped for a REASON, and the reader
+       * cannot tell that from an untagged one by looking. */
+      if (halted) {
+        warning = "GitHub asked us to slow down (" + halted + ") — " + unread +
+                  " unread; try rescan in a few minutes";
+      } else if (unread) {
+        warning = warning || (unread + " unread — press rescan to try again");
+      }
       if (found.size) {
         facts = names.map((n, i) => (topics[i].length ? facts[i] : found.get(n) || facts[i]));
         topics = facts.map((f) => (f && f.topics) || []);

@@ -182,12 +182,20 @@
   line-height: 16px;
 }
 
-/* THE FALLBACK MUST BE HARMLESS. When the row's markup is not one we
-   recognise, view.js appends to the <li> itself — so these two rules make that
-   case wrap instead of crush. `flex-shrink: 1` and `min-width: 0` are the
-   difference between a note on its own line and a row squeezed to nothing. */
-#shelves-host li { flex-wrap: wrap; }
-#shelves-host li > .sh-margin { flex: 1 1 100%; min-width: 0; }
+/* THE FALLBACK MUST BE HARMLESS, AND SO MUST ITS CSS. When the row's markup
+   is not one we recognise, view.js appends to the <li> itself — so these two
+   rules make that case wrap instead of crush. `flex-shrink: 1` and
+   `min-width: 0` are the difference between a note on its own line and a row
+   squeezed to nothing.
+
+   THEY ARE SCOPED TO THAT CASE BY THE FLAG. Unscoped, `flex-wrap: wrap` was
+   being applied to every repository row on the page — rewriting GitHub's own
+   flex layout on the many rows where our margin sat safely in a text column
+   and nothing needed to wrap at all. A row whose children total exactly 100%
+   is one rounding error away from wrapping a child onto a line of its own, and
+   whatever lands there brings its full natural height with it. */
+#shelves-host li[data-sh-loose="1"] { flex-wrap: wrap; }
+#shelves-host li[data-sh-loose="1"] > .sh-margin { flex: 1 1 100%; min-width: 0; }
 
 .sh-note-btn {
   font: inherit;
@@ -553,4 +561,12 @@
    classes would not have done. */
 .sh-mark .sh-margin[data-has="0"] .sh-note-btn {
   opacity: 1;
+}
+
+/* A stated cap, drawn as quietly as the thing it is counting. */
+.sh-v-more {
+  align-self: center;
+  font-size: 11px;
+  color: var(--fgColor-muted, #8b949e);
+  padding: 0 4px;
 }

@@ -19,8 +19,41 @@ right object. GitHub simply never renders a view that groups by them.
 
 SHELVES is that view. It reads the topics and re-draws the page as named,
 counted, collapsible sections. It is a **lens on your own data**, and that phrase
-is the whole design: it never writes to GitHub, never stores your repositories
-anywhere, and uninstalls to exactly the page you had before.
+is the whole design: it never writes to GitHub, and uninstalling removes every
+trace of it.
+
+### What it keeps, and where
+
+An earlier version of this paragraph said SHELVES *"never stores your
+repositories anywhere"*. That was true when the cache held topics and nothing
+else. **It has not been true since `facts.js`,** and a promise the code
+contradicts is worse than no promise — so here is the whole of it.
+
+In `chrome.storage.local`, on this machine, unencrypted, for every repository
+including **private** ones:
+
+| kept | why |
+|---|---|
+| `owner/name`, description, language, stars, forks, licence, homepage, last-touched | one repo-page read, kept instead of thrown away |
+| the README's **first 400 characters** | so `/` can find a repo you cannot name |
+| your private **notes** | the one thing here nothing can rebuild |
+| `shelfMap` — your shelf list, counts, and every repo name | so a repo's own page can wear its shelf's colour |
+
+And in `chrome.storage.sync`: your shelf configuration. **Never the token** —
+that is `local` only, because a credential must not ride sync (P.II).
+
+Four things are true about all of it, and they are the actual promise:
+
+- **None of it leaves the browser.** The extension makes requests to exactly two
+  hosts, `github.com` and `api.github.com`, and there is no other network call
+  of any kind in the codebase.
+- **`local` does not sync.** It does not travel to your other machines.
+- **Uninstalling deletes it**, which is what principle I's "complete undo"
+  means and is still true.
+- **Anyone who can read this browser profile can read all of it.** MV3 offers
+  no encrypted store, so that is inherent rather than a choice — but it has to
+  be said rather than implied, especially for private repository names and for
+  notes, which people write candidly precisely because they are private.
 
 ### Three routes, not one page
 
@@ -230,6 +263,31 @@ And one lesson about method rather than about GitHub: **when a test fails, check
 the harness before the code.** Two of the prototype's "failures" were a faulty
 regex in the test stub — `/page=(\d+)/` cheerfully matching `per_page=100` — and
 not defects in what was under test.
+
+### XIV. Spend the reader's credentials only on the reader's own pages
+
+The token, the session cookie and the request budget are the reader's, and the
+extension spends all three. Before publication it spent them on anyone's page:
+`isRepoTab()` tested the URL shape and nothing anywhere asked *whose* profile it
+was, so opening a stranger's Repositories tab sent the reader's Bearer token to
+an endpoint that answers with the reader's own repos — useless there — and then
+fetched every one of the stranger's repo pages with the reader's cookie, cached
+them permanently, and left the background top-up refreshing them forever. One
+click on a link; six hundred authenticated requests.
+
+The rule that replaces it: **the free rungs work anywhere, the expensive ones
+work only on your own profile.** A stranger's page still gets page chips and the
+public API for their username — one or two requests, no credential, no scraping,
+no cache write — so this is a narrowing and not a refusal.
+
+Two corollaries, both of which were separately wrong:
+
+- **Stop when the server says stop.** `scrape()` is the highest-volume path in
+  the extension and was the only one with no backoff; measured against a server
+  answering 429 to everything, it issued all forty requests anyway and showed
+  the reader no explanation at all.
+- **A cache that never forgets is a liability**, not a feature. There was no
+  eviction path anywhere.
 
 ### XIII. Never report an absence you could not have measured
 

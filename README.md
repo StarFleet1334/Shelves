@@ -20,7 +20,14 @@ shelf's colour, with your private note — and if you let it, it quietly keeps i
 cache warm while you are elsewhere on GitHub so you never wait fifteen seconds
 for a cold read again.
 
-It is a lens, not an editor. It never writes to your GitHub account.
+It is a lens, not an editor. It never writes to your GitHub account, and it
+talks to exactly two hosts — `github.com` and `api.github.com`. Nothing it
+learns leaves your browser.
+
+It does **keep** things there, though, and the charter spells out exactly what
+(topics, descriptions, README openings, your notes — for private repos too,
+unencrypted, in your browser profile). Worth reading before you install it on a
+shared machine.
 
 ```
 ┌ expand all · collapse all · flat list · rescan · audit 9 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via repo pages ┐
@@ -229,6 +236,20 @@ throttled.
 It refreshes what it has already seen and never discovers. A first run is still
 cold; the point is that the second week is not.
 
+### On other people's profiles
+
+The shelves work on anyone's Repositories tab, but on a profile that is not
+yours they use the **free rungs only**: topic chips already in the page, plus
+the public API for that username. One or two requests, no token, no repo-page
+scraping, and nothing written to your cache.
+
+That is a deliberate narrowing, not a limitation. Your token answers *"what are
+**my** repositories"*, which tells you nothing about somebody else's page — so
+sending it there spends a credential on a request that cannot use it. And rung 4
+would fetch every one of their repos with your session cookie: on a 600-repo
+account, six hundred authenticated requests for one click on a link. The toolbar
+says `· not yours` so you can see which rungs answered.
+
 ### When GitHub's page moves
 
 The repo page will be restructured eventually, and today that failure would be
@@ -358,6 +379,27 @@ lines in the code are load-bearing, and the charter is where the reasons live.
 
 ---
 
+## What it stores
+
+In your browser profile, unencrypted, via `chrome.storage.local`:
+
+- **the fact cache** — for every repo including private ones: name, description,
+  language, stars, forks, licence, homepage, last-touched, and the README's
+  first 400 characters
+- **your notes** — the one thing here that nothing can rebuild
+- **the shelf map** — your shelf names, their counts, and your repo names
+- **the token**, if you added one — `local` and never `sync`, so it does not
+  travel between machines
+
+Entries are pruned once they have been untouched for four cache lifetimes (at
+least 90 days), and the cache is capped at 3 000 repos. **Clear topic cache** in
+options empties it now; your notes are never touched by it.
+
+None of this ever leaves the browser — but anyone who can read your browser
+profile can read all of it, including private repository names and whatever you
+wrote in your notes. MV3 has no encrypted store, so that is inherent rather than
+a choice. Worth knowing before installing on a shared machine.
+
 ## Known limits
 
 - **Chrome and Edge only.** Firefox's MV3 service workers differ enough to be a
@@ -392,4 +434,6 @@ lines in the code are load-bearing, and the charter is where the reasons live.
 | the chip on a repo page has no colour | you are auto-grouping and have not opened your Repositories tab yet — the colour depends on the whole shelf list, so it declines to guess one |
 | no chip at all on a repo page | only the repo's landing page carries the About sidebar it sits in; sub-pages (issues, code, a file) do not |
 | the audit says "not asked" | those repos were answered by the GitHub API, whose body does not carry that field. A rescan without a token reads the pages themselves |
+| the toolbar says `· not yours` | you are on someone else's profile; only the free rungs run there, on purpose |
+| the toolbar says `N unread` | GitHub refused some repo-page reads — often a rate limit. Press **rescan** in a few minutes |
 | the toolbar says GitHub's page changed shape | it probably has. `facts.js` owns every repo-page selector; nothing else needs looking at |
