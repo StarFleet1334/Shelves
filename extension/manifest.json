@@ -25,6 +25,7 @@
         "src/store.js",
         "src/dom.js",
         "src/facts.js",
+        "src/rule.js",
         "src/topics.js",
         "src/vocab.js",
         "src/audit.js",

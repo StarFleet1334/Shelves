@@ -111,7 +111,7 @@ globalThis.Shelves = globalThis.Shelves || {};
      * first visit that has no map yet. */
     const map = await S.shelfmap.read(owner);
     if (map && Array.isArray(map.order) && map.order.length) {
-      return { order: map.order, counts: map.counts || null };
+      return { order: map.order, counts: map.counts || null, on: map.on || null };
     }
     if (settings.groups.length) {
       return { order: settings.groups.concat(settings.otherLabel), counts: null };
@@ -235,8 +235,33 @@ globalThis.Shelves = globalThis.Shelves || {};
      * It costs nothing: overrides are local, and this page already reads two
      * other local stores below. */
     const pinned = (await S.overrides.read())[String(name || "").toLowerCase()];
-    const label = S.bucketFor(topics, settings, pinned);
+    /* A RULE SHELF NEEDS MORE THAN TOPICS TO DECIDE, and this page is holding
+     * all of it: `factsFrom` reads the same ten fields out of the document
+     * already in front of us, for no request at all. Without them the chip
+     * would resolve rule shelves from topics alone and land on `Ungrouped`
+     * for a repo the profile has on a real shelf — the disagreement the shelf
+     * map exists to prevent, arriving by a new route. */
     const known = await labelsFor(owner, settings);
+
+    /* ── THE PROFILE ALREADY WORKED THIS OUT ────────────────────────────────
+     * Re-deriving the shelf here was always the second-best answer, and a rule
+     * shelf makes it the wrong one: at the ~160ms this runs, GitHub has not
+     * rendered the languages bar or the timestamps — they arrive with its own
+     * client-side pass — so `lang:java` was unanswerable and the chip fell to
+     * Ungrouped on a repo the profile had on `Java`. Waiting for the DOM to
+     * settle would be a race with no finish line.
+     *
+     * The map is the answer. It is written on every render for exactly this,
+     * and it is the whole argument of `store.js`'s shelfmap: the page that
+     * knows writes it down, and the page that cannot work it out reads it
+     * rather than guessing a different answer.
+     *
+     * The derivation stays as the fallback for a first visit with no map, and
+     * for a repo created since the profile was last open. */
+    const recorded = known && known.on && known.on[name];
+    const label = recorded ||
+      S.bucketFor(topics, settings, pinned,
+                  S.factsFrom(document, name, true));
     const marks = known
       ? S.identity(known.order, settings.otherLabel)
       : new Map();

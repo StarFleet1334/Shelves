@@ -48,6 +48,7 @@ globalThis.Shelves = globalThis.Shelves || {};
   const NOTES_KEY = "notes";
   const MAP_KEY = "shelfMap";
   const OVER_KEY = "overrides";
+  const PIN_KEY = "pins";
   const MAX_FACTS = 3000;   // far above any real account, far below the quota
 
   const api = () =>
@@ -235,6 +236,39 @@ globalThis.Shelves = globalThis.Shelves || {};
     },
   };
 
+  /* ---- pins: { "owner/name": true } ------------------------------------- */
+  /* THE TOP OF A SHELF IS THE ONLY PLACE ON THIS PAGE WITH A VIEW. A shelf of
+   * thirty is a scroll like any other; the three you are actually working on
+   * belong where the eye lands. Ordering is the cheapest possible edit — the
+   * rows are already there, nothing is fetched, nothing is hidden.
+   *
+   * Local and rescan-proof for the same reason as notes and overrides: no
+   * request re-derives which repositories matter to you this month. The three
+   * of them are now the whole of the category. */
+  S.pins = {
+    async read() {
+      const got = await get("local", { [PIN_KEY]: {} });
+      const o = got[PIN_KEY];
+      return o && typeof o === "object" ? o : {};
+    },
+    write(all) {
+      return set("local", { [PIN_KEY]: all });
+    },
+    /** The value is WHEN, not `true`. The page shows pinned rows in the order
+     *  they were pinned — which is the order the reader watched them rise in —
+     *  and without a stamp the next load re-derived that block in GitHub's own
+     *  source order instead, so the page quietly rearranged itself. */
+    async toggle(name, when) {
+      const all = await this.read();
+      const key = String(name || "").toLowerCase();
+      if (!key) return { ok: false, pins: all };
+      if (all[key]) delete all[key];
+      else all[key] = when || Date.now();
+      const ok = await this.write(all);
+      return { ok, pins: all, on: !!all[key] };
+    },
+  };
+
   /* ---- the one write to the reader's own configuration ------------------ */
   /* Every other write in this file is derived, disposable or private. This one
    * is the reader's setup, so it is deliberately small and deliberately
@@ -345,6 +379,48 @@ globalThis.Shelves = globalThis.Shelves || {};
         localStorage.setItem(this.key(owner), value === "compact" ? "compact" : "roomy");
       } catch (e) {
         /* private mode or a full quota — the page simply opens roomy again */
+      }
+    },
+  };
+
+  /* ---- when the reader was last on this page ---------------------------- */
+  /* WHAT GITHUB CANNOT TELL YOU. It knows when every repo was pushed; it has
+   * no idea when YOU last looked, so "three of these moved since you were
+   * here" is a sentence only something living in your browser can say.
+   *
+   * localStorage, per profile, beside the other two postures — it is a fact
+   * about this machine's reading, not a preference, and syncing it would make
+   * "since you were last here" mean "since you were last here on any of four
+   * computers", which is not a sentence anyone wants.
+   *
+   * READ ONCE PER VISIT AND STAMPED ONCE. Every render reading and rewriting
+   * it would make the answer zero forever: the second pass of a progressive
+   * render, or a Type/Language filter, would each count as "last time". */
+  S.seen = {
+    /* ONCE PER PAGE, NOT ONCE PER `run()`. GitHub's Type and Language menus
+     * destroy the host, the observer re-enters `run()`, and the second pass
+     * re-read the stamp it had written milliseconds earlier — so "3 since you
+     * were here" became nothing the moment the reader touched a dropdown.
+     * `run()` is documented idempotent; this was the one piece of state where
+     * calling it twice differed from calling it once. */
+    _done: false,
+    key(owner) {
+      return "shelves:seen:" + owner;
+    },
+    read(owner) {
+      try {
+        return Number(localStorage.getItem(this.key(owner))) || 0;
+      } catch (e) {
+        return 0;
+      }
+    },
+    stamp(owner, now) {
+      if (this._done) return;
+      this._done = true;
+      try {
+        localStorage.setItem(this.key(owner), String(now || Date.now()));
+      } catch (e) {
+        /* no memory of this visit; next time simply says nothing */
       }
     },
   };

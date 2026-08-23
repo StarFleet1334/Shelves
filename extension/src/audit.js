@@ -31,14 +31,13 @@ globalThis.Shelves = globalThis.Shelves || {};
 (function (S) {
   "use strict";
 
-  /* Which fields each source is capable of carrying. `page-chips` is rung 1 —
-   * topics were read off the profile row and no repo page was ever fetched, so
-   * it can answer for nothing but the topics themselves. */
-  const CARRIES = {
-    page: ["description", "language", "license", "homepage", "readme", "archived", "updated"],
-    api: ["description", "language", "license", "homepage", "archived", "updated"],
-    "page-chips": [],
-  };
+  /* WHICH FIELDS EACH SOURCE CAN CARRY LIVES IN facts.js, beside the functions
+   * that build the records. It was duplicated here, and a second copy of this
+   * particular fact is a slow-motion bug: `rule.js` now asks the same question
+   * to tell "no forks" from "nobody asked", and a table that drifts would make
+   * the audit report a gap nobody could fill while a rule shelf quietly
+   * excluded repos it had no opinion about. */
+  const carries = (via, field) => S.carries(via, field);
 
   const GAPS = [
     {
@@ -81,7 +80,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     const answers = (i, field) => {
       if (!field) return true;
       const via = (fs[i] || {}).via;
-      return !!(CARRIES[via] && CARRIES[via].indexOf(field) !== -1);
+      return carries(via, field);
     };
 
     const gaps = [];

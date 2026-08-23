@@ -15,11 +15,27 @@ And **audit** reads the collection back to you: which topics are three spellings
 of one idea, which are on everything and therefore group nothing, and which of
 your repos have no description, no README or no licence.
 
+A shelf does not have to be a word, either. `Java = lang:java fork:false` is a
+shelf whose membership is a **question**, asked once per page against records
+the extension already read — thirteen fields, all AND-ed, `-` to negate. Each
+header then says what the shelf is **worth** rather than only how big it is:
+total stars, how many have gone stale, and how many moved *since you were last
+here*, which is the one thing GitHub cannot tell you because it does not know
+when you looked. A row wears small chips for the other shelves it matched, and
+the handful you are actually working on can be **pinned** to the top of theirs.
+
 It has an answer for the first day, too — the account that has never tagged
 anything, where grouping by topic is correct and useless. It **suggests** the
 shelves your repository names and languages already imply, **walks** you through
 the untagged repos one tab at a time, and lets you put a repo on a shelf **by
 hand**. All three are kept in this browser; none of them writes to GitHub.
+
+It is a page you can work at speed. The shelves are drawn in the **first frame**
+from what is already free and correct themselves when the ladder answers, so a
+slow read happens behind a page you can already use. **compact**
+puts a repository on one line — 109px down to 41px, nine rows a screen up to
+twenty-four — and remembers that per profile. And `/`, `j`, `k`, `1`–`9`, `e` and
+`c` mean the map can be walked without a mouse.
 
 It no longer lives on one page. Open a repo and it wears its shelf's mark, in the
 shelf's colour, with your private note — and if you let it, it quietly keeps its
@@ -36,7 +52,7 @@ unencrypted, in your browser profile). Worth reading before you install it on a
 shared machine.
 
 ```
-┌ expand all · collapse all · flat list · rescan · audit 9 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via page + api (public) + repo pages ┐
+┌ expand all · collapse all · compact · flat list · rescan · audit 9 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via page + api (public) + repo pages ┐
 
 ▾ aiproject                                                                                         12
     chat-agent          Python  ★2   Updated 2 days ago      Private
@@ -75,6 +91,11 @@ page at a time, behind a progress line: `reading topics from repo pages 34/76 �
 cached after this`. On the 77-repo account this was last measured against that
 came to **one API call and no repo-page reads at all**; an account that is
 mostly private is ten to twenty seconds. Every load after that is instant.
+
+You do not wait that out looking at the flat list. The page is shelved in the
+first frame from the topic chips already on the rows plus whatever the cache
+holds — **341 ms**, against 1 178 ms when the cache is cold — and re-shelves
+itself when the ladder answers. See *the first frame*, below.
 
 ### Tag some repos first
 
@@ -142,14 +163,141 @@ Click the extension's icon (or `chrome://extensions` → *Details* → *Extensio
 options*):
 
 - **Your shelves** — the topics you want as sections, in order. A repo goes on
-  the **first** shelf whose topic it carries. Leave it empty and SHELVES groups
-  automatically by whatever topics it finds, biggest shelf first.
+  the **first** shelf whose topic it carries. An entry with an `=` in it is a
+  **rule** rather than a topic — see below — and the two kinds sit in one list.
+  Leave it empty and SHELVES groups automatically by whatever topics it finds,
+  biggest shelf first.
 - **Private repositories** — nothing to do. It works with no token; see below
   if you want it faster.
 - **Behaviour** — start collapsed, how long to remember topics, what to call
   the leftovers shelf. Concurrency, page depth and the rung-4 ceiling
   (`scrapeMax`, 100) are defaults in `src/store.js` and are not on this page
   yet; the ceiling has a button on the toolbar instead.
+
+### A shelf that is a question
+
+A shelf's name is normally a topic, matched literally, and for a well-tagged
+collection that is the whole answer. It cannot express the shelf people
+describe out loud — *the Python ones I still work on*, *everything I forked and
+never touched* — because those are three fields and a date. Put an `=` in a
+shelf entry and the left half is the name, the right half is the membership:
+
+```
+Live Python = topic:ai lang:python fork:false pushed:<90d
+Java        = lang:java fork:false
+Old Guard   = pushed:>2y
+config
+```
+
+An entry with no `=` is the plain topic shelf SHELVES began with, so both kinds
+live in **one list, in one order**, and there is nothing to migrate. The rule is
+parsed **once per page** and applied to the rows already on it — no request, no
+index, no second axis. A repo still lands on the **first** shelf that takes it,
+tried in the order you wrote them, so there is no new precedence to learn.
+
+| term | matches |
+|---|---|
+| `topic:` `topics:` | one of the repo's topics |
+| `lang:` `language:` | the language, **exactly** — `lang:java` is Java, never JavaScript |
+| `license:` | the licence, exactly — `license:mit` |
+| `name:` | anywhere inside the repo's own name, without the `owner/` |
+| `desc:` `description:` `readme:` `homepage:` | anywhere inside that text |
+| `fork:` `archived:` `private:` | `true` or `false` (`yes`/`no` also read) |
+| `stars:` `forks:` | a number, with `>` `<` `>=` `<=` — `stars:>10` |
+| `pushed:` `updated:` | an age **with a unit** — `90d`, `6m`, `2y` |
+| a bare word | anywhere in the name, the description or the topics |
+
+Every term is `AND`-ed. There is no `or` and there are no parentheses: two
+ideas are two shelves, which is the model the rest of this extension already
+has. A leading `-` negates one term (`-topic:demo`, `-name:test`). And
+`pushed:<90d` reads as *pushed within the last 90 days* — the plain-English
+sense, which is the reverse of the arithmetic; `pushed:>2y` is *not touched in
+two years*.
+
+Three rules a rule shelf keeps to, each of which is a way it could have lied
+instead:
+
+- **A term nobody can judge excludes the repo, and the shelf says how many.**
+  `fork:false` against a record that came from the topic chips on the row is not
+  false — it is *unknown*, and answering an unknown as false is how a shelf
+  quietly fills with the wrong repos. Those repos stay on the leftovers shelf,
+  which is this project's safe failure everywhere else too, and the rule shelf's
+  own header states `N unjudged`.
+- **A term nobody can parse is named, never dropped.** `Oops = lang:python
+  topc:ai pushed:90` has two: a misspelt field and an age with no unit. The
+  toolbar prints `unreadable in Oops: topc:ai pushed:90` and the rest of the
+  rule still applies. A shelf that silently ignores a third of itself leaves you
+  looking at contents you cannot explain.
+- **First match still wins.** A rule shelf is tried exactly where its entry sits
+  in your list, and a repo that satisfies two of them is on the first one only.
+  What the second one would have said is given back as a chip on the row — see
+  *the shelves a row also matched*, below.
+
+**A rule shelf is allowed to be empty, and that is not always a bug.** The
+example this feature was sketched from — `topic:ai lang:python fork:false
+archived:false pushed:<90d` — returns **zero** on the profile it was measured
+against, because that account has **1 tagged repo of 54** and **1 repo pushed
+inside two years**. The grammar is sound; the collection is sparse, which is the
+same fact the first-day features above exist for. Written against terms that
+collection can actually answer — `Java = lang:java fork:false`,
+`Recent = pushed:<180d`, `Old Guard = pushed:>2y`, `config` — the same 54 repos
+came out **Java 26, Recent 1, Old Guard 23, Ungrouped 4**.
+
+The other reason a rule shelf comes back thin is that nobody could look. A rule
+can only ask what the record's source actually carries, and a repo answered by
+its own page carries no language and no push date — GitHub renders the languages
+bar and every timestamp on the client now, so they are simply not in the HTML
+SHELVES reads. On a scraped collection a `lang:` or `pushed:` term reports every
+repo as `unjudged` rather than answering "none", which is the difference between
+*you have no Python* and *nobody could look*. A token moves those repos to the
+API, which does carry both.
+
+### What a shelf is worth
+
+The header used to carry a count. The records to say more were already read —
+one repo page gives up ten fields — so it now carries three more things (and a
+fourth on a rule shelf), before the count and quieter than it:
+
+```
+▾ Java                                     ★ 1 · 26 stale                     26
+```
+
+- **`★ <n>`** — stars totalled across the shelf.
+- **`<n> stale`** — repositories with nothing pushed in a year.
+- **`<n> since you were here`** — repositories pushed since your last visit to
+  this page. **This is the one GitHub cannot say.** It knows when every repo was
+  pushed and has no idea when you last looked; that timestamp is
+  `shelves:seen:<owner>` in this browser's storage, read and stamped **once per
+  visit**. Once, and not per render: the page draws itself twice (the first
+  frame, then the ladder's answer) and again after a Type or Language filter, so
+  a stamp per render would make "since you were here" mean "since a few hundred
+  milliseconds ago" and the answer would be zero forever.
+- **`<n> unjudged`** — on a rule shelf, how many repositories that rule could
+  not decide about because a term named a field their source cannot carry. They
+  are on the leftovers shelf.
+
+**It says nothing rather than zero.** A page answered entirely by the topic
+chips on the rows carries no stars and no dates at all, and `★ 0 · 0 stale`
+would be a statement about your collection when it is a statement about the
+source that answered. That is the same test the audit uses to decide a
+denominator, and it is now the same table.
+
+### The shelves a row also matched
+
+First match wins the row, and it has to: a repo on two shelves is two counts
+that do not add up and a list you cannot scan once. But what that rule throws
+away is real — knowing `wiremock-api` is on `tooling` and would also have been
+on `Java` is most of what you want when a shelf looks thin. So a row wears small
+chips naming the other shelves it matched, up to four and then `+n`.
+
+They ride in the same margin as the note and the grip, which on a row with no
+note is parked in the padding GitHub already leaves under every row — so they
+cost the row **no height**. They are drawn and not pressable: a chip you could
+click would mean *put it there*, which is what the grip is for, and would
+quietly become a second way to write an override.
+
+Auto-grouping draws none of them. With no shelves configured there is one shelf
+per topic, so every chip would be a restatement of the row.
 
 ### Find anything (`/`)
 
@@ -162,6 +310,54 @@ about rate limiting"* is findable here and not there.
 Shelves show `hits / total` while you search, and a shelf with nothing in it
 dims rather than disappearing — the shelves are the map, and a map that
 reshuffles while you search it is harder to read. `Esc` clears.
+
+### The keys
+
+The shelves are the navigation now, so they answer to the keyboard:
+
+| | |
+|---|---|
+| `/` | the filter, focused and its text selected |
+| `j` / `k` | the next / previous shelf |
+| `1`–`9` | that shelf, opened |
+| `e` / `c` | expand / collapse every shelf |
+| `Esc` | clears the filter, in the box itself |
+
+`j` and `k` move **focus**, not just the scroll — focus is what a screen reader
+follows and what `Enter` or `Space` then acts on — and they wrap round rather
+than stopping dead at the end. A digit opens the shelf it lands on, because a
+shelf you jumped to and cannot see is not a jump; only the first nine are
+reachable that way, and a digit naming no shelf is left alone for GitHub.
+
+Every one of them stands down inside a field — GitHub's own boxes and this
+extension's note editor included — so the only keys they ever take are ones
+pressed while reading. A modified key is the browser's: `ctrl`+`J` is the
+download shelf and a shortcut that eats it is a bug in somebody else's app.
+
+`/` in particular is **taken rather than shared**. GitHub binds it on the
+document too, and their script runs long before a content script does, so their
+listener fires first — measured, our `/` was opening GitHub's quick-search
+overlay on top of the page. The map is registered in the capture phase and stops
+the key there.
+
+### One line per repository
+
+Press **compact** in the toolbar. GitHub draws a repository row 109px tall —
+24px of padding either side of a heading, a description it may not have, a topic
+row it may not have and a footer line — which on 77 repos is eight screens to
+read a list, and the shelves cannot help because the shelves are not what is
+tall. Measured on a real profile: **109px → 41px per row, nine rows on a screen
+→ twenty-four.** Press **roomy** to go back.
+
+It is a reading posture, not a second rendering path. Nothing is removed from
+the row: the description, the topic chips and the commit graph are hidden by
+CSS, so `/` still searches every one of them and pressing `roomy` gives them
+straight back — the same reason the rows are GitHub's own elements in the first
+place.
+
+The choice is remembered **per profile**, in this browser only. It deliberately
+does not sync: the right density depends on the screen, and a 27-inch monitor's
+answer is the wrong one on a laptop.
 
 ### A private margin
 
@@ -208,6 +404,26 @@ alone, for the same reason — no request re-derives one.
 The menu lists only shelves that already exist. Inventing a shelf is what the
 suggestions are for, and an override naming a shelf nothing draws would put the
 row somewhere the page cannot show it.
+
+#### Pin it to the top
+
+The same menu's **first** entry is `⚑ pin to top`, because the top of a shelf is
+part of where a repo goes and does not need a second control of its own. A
+pinned row rises to the top of the shelf it is already on and wears a mark down
+its left edge; the same entry then reads `⚑ unpin`.
+
+Pinned rows are a **stable partition, not a sort**. The order inside a shelf is
+GitHub's — your own `Sort` setting on the page — and rearranging it is not this
+extension's business. The only claim being made is *these few first*, so
+everything else stays exactly where GitHub put it. Pinning a repo puts it
+**below** the ones already pinned, so pinning three in a row does not reverse
+them, and unpinning drops a row back under the pinned ones rather than to the
+bottom of the shelf.
+
+Pins live in this browser against `owner/name`, like your notes and your
+overrides, and like them *rescan* and *clear topic cache* leave them strictly
+alone — no request can re-derive which three repositories matter to you this
+month. Those three are the whole of that category.
 
 ### Shelf identity — a colour and a glyph
 
@@ -356,6 +572,8 @@ So the source line is a **list of the rungs that contributed**, not one name:
 ```
 via page
 via api (token)
+via page + cache
+via already read
 via page + api (public)
 via api (public) + repo pages (cached)
 via page + api (public) + repo pages
@@ -375,6 +593,61 @@ A deferred repo is **not** counted among the `N unread`: unread means we tried
 and failed, and its cure is *rescan*. And it is not drawn as a warning, because
 nothing went wrong — a limit you can lift is a choice offered, and filing it
 beside `token rejected` would teach you to read a choice as a fault.
+
+### The first frame, before the ladder answers
+
+A cold run is one request per repository, and until it finishes you would be
+looking at the flat list you opened the page to get away from. Two sources cost
+nothing and are already here: the topic chips GitHub renders on the rows, and
+every repository the cache has read on a previous visit. The page is shelved
+from those immediately, and re-shelved when the ladder actually answers.
+Measured on the live profile: **341 ms to the first frame**, against 1 178 ms
+with a cold cache.
+
+While it is provisional the source line says `via page + cache` — it will never
+name a rung that has not run — and the shelves you see then are a guess that
+may be corrected: a shelf can appear, and a repository can move once.
+
+**Nothing about that first frame is written down.** Not which shelves you left
+open, not the shelf map another page would colour its chip from — a guess that
+outlived the guessing would be a shelf order the finished page disagrees with.
+
+The correction **re-buckets the page rather than redrawing it**, which is why
+you can use it straight away: whatever you typed in the find box is still
+there and still applied, an open audit panel keeps your place in it, a shelf
+you opened stays open, and keyboard focus does not move. A row only moves if
+its shelf changed.
+
+It helps exactly where the waiting is. The cache only ever holds repositories
+read from their own pages — the private ones the API cannot see — so an account
+the API answers in one call has nothing cached, skips this, and loses nothing
+by it.
+
+### GitHub's own filters
+
+The **Find a repository** box beside the shelves is GitHub's and still theirs:
+it is a server-side search, and nothing here touches it.
+
+The **Type** and **Language** menus are a different thing. They do not reload
+the page — they fetch, and then replace the whole list underneath us with new
+rows. The shelves are rebuilt around whatever comes back, and two things
+deliberately survive that:
+
+- **the answer.** Every repository this visit has already resolved is
+  remembered for as long as the tab is open, so touching a dropdown costs
+  **zero** requests rather than re-reading the collection. The source line then
+  reads `via already read`.
+- **what you typed.** The find box is refilled and the filter re-applied.
+  Measured through the real dropdown: before `2 of 54`, after
+  `26 repos · 1 shelves · 0 tagged · via already read`, the box still reading
+  `gym` and the count `1 of 26`.
+
+A filter that came from the **audit** is not restored, on purpose — it names a
+specific list of repositories, and the new list may not contain them. A filter
+that silently means something else is worse than no filter.
+
+The memory lives only in the page, so it dies when the tab does: a reload reads
+the ladder again, and *rescan* is unaffected by it.
 
 ### Keeping the cache warm (off by default)
 
@@ -484,12 +757,12 @@ repository you own, one at a time.
 ```
 cd tests
 npm install                     # jsdom, once — the extension itself has no dependencies
-node harness.js                 # all 30 scenarios
+node harness.js                 # all 38 scenarios
 node harness.js ladder-floor    # just that one
 node harness.js facts find      # two of them
 ```
 
-Thirty scenarios drive the real content scripts and the real service
+Thirty-eight scenarios drive the real content scripts and the real service
 worker against a jsdom GitHub.
 
 **Name a scenario by keyword, never by number.** A number is an index and it
@@ -531,6 +804,31 @@ release too long — by the end its row 17 said `identity` while scenario 17 was
 - `not yours` — on somebody else's profile the page is still shelved, still
   searchable and still audited, and every verb that would write the reader's
   own setup is simply not drawn
+- `progressive` — the page is shelved from the chips and the cache before the
+  ladder answers, says `via page + cache` while it is a guess, writes nothing
+  down, and corrects itself into the same host — keeping what you typed, the
+  rows it hid, and every listener on them
+- `compose` — GitHub's own Type/Language swap costs zero extra reads and zero
+  API calls, and the query you typed is put back and re-applied
+- `density` — one attribute is the whole switch, it is remembered per profile
+  and read before the first paint, and the row keeps every field it had
+- `keyboard` — `/` `j` `k` `1`–`9` `e` `c`: focus moves, digits open, and
+  fields and modified keys are left alone
+- `rule-shelf` — a shelf may be a question: only the repo satisfying every term
+  is on it, a topic shelf still works beside it in one list, an unreadable term
+  is named in the toolbar rather than dropped, and the four ways a term can
+  quietly mean something else — `lang:` exact, `name:` without the owner,
+  `private:` actually carried, and a field the source cannot see reported as
+  unknown rather than empty
+- `weight` — stars totalled, stale counted, `since you were here` measured from
+  a stamp taken once per visit — and nothing at all drawn on a source that
+  carries neither stars nor dates
+- `sibling-shelves` — first match still wins the row, the shelves it also
+  matched are given back as chips, never the shelf it is on, and they sit in
+  the note margin rather than in a line of their own
+- `pin-top` — a pinned repo opens at the top of its shelf, pinning puts a row
+  below the ones already pinned, unpinning drops it back under them, and the
+  key is written and removed with it
 - `vocabulary` — families, suspicions, blanket labels and singletons, each drawn
   as what it is, and 3 000 topics in milliseconds
 - `audit` — gaps denominated per field per source; a finding filters to its own
@@ -572,7 +870,10 @@ we take on **GitHub's** page rather than about our own markup: `tests/row-
 height.py` loads the unpacked extension into a real browser, opens a real
 profile, and asserts that a shelved row is exactly as tall as GitHub's own —
 switching each of our rules off in the live page to find out which one owns the
-difference.
+difference. It now also presses **compact** and measures the row again, because
+that is the same kind of claim: jsdom computes no layout, so the harness can
+assert the attribute, the toggle and the memory and nothing whatever about
+whether the stylesheet made the row shorter.
 
 **Run it signed in.** A signed-out profile is a different page, not a cheaper
 sample of the same one: the lazy fragments GitHub ships inside a repo row only
@@ -603,20 +904,24 @@ shelves/
 │   ├── icons/              generated by tools/make_icons.py
 │   └── src/
 │       ├── store.js        settings · token · fact cache · notes · overrides ·
-│       │                   the one write to groups · collapse · the bench
+│       │                   pins · the one write to groups · collapse ·
+│       │                   the bench · when you were last here
 │       ├── dom.js          route detection, list finding, page merging
-│       ├── facts.js        ONE parse of a repo page → ten fields
+│       ├── facts.js        ONE parse of a repo page → ten fields, and which
+│       │                   rung can answer for which of them
+│       ├── rule.js         a shelf whose membership is a question, parsed once
 │       ├── topics.js       the four-rung topic ladder; rung 1 is a floor
 │       ├── vocab.js        the topics as a system, suggested shelves, the panel
 │       ├── audit.js        the repos as a system: what is missing
-│       ├── view.js         bucketing, rendering, shelf identity
+│       ├── view.js         bucketing, rendering, shelf identity, what a shelf
+│       │                   is worth, sibling chips, pinned rows first
 │       ├── mark.js         route 2 — the mark on a repo's own page
 │       ├── warm.js         route 3 — the opt-in background top-up
 │       ├── main.js         lifecycle; one idempotent run()
 │       └── shelves.css     themed off GitHub's own CSS variables
 ├── tests/
 │   ├── world.js            fake GitHub: jsdom + chrome stub + real worker in a vm
-│   ├── harness.js          the 30 scenarios, selected by keyword
+│   ├── harness.js          the 38 scenarios, selected by keyword
 │   └── package.json        jsdom, dev only
 └── tools/make_icons.py     regenerates the icons from source
 ```
@@ -634,9 +939,12 @@ In your browser profile, unencrypted, via `chrome.storage.local`:
 - **the fact cache** — for every repo including private ones: name, description,
   language, stars, forks, licence, homepage, last-touched, and the README's
   first 400 characters
-- **your notes** — one of the two things here that nothing can rebuild
+- **your notes** — one of the three things here that nothing can rebuild
 - **your overrides** (`overrides`) — the repos you put on a shelf by hand,
-  keyed `owner/name`. The other thing nothing can rebuild
+  keyed `owner/name`. The second thing nothing can rebuild
+- **your pins** (`pins`) — the repos you sent to the top of their shelf, keyed
+  `owner/name`, as `{ "owner/name": true }`. The third, and the last: no
+  request re-derives which repositories matter to you this month
 - **the shelf map** — your shelf names, their counts, and your repo names
 - **the token**, if you added one — `local` and never `sync`, so it does not
   travel between machines
@@ -646,15 +954,26 @@ configuration and lives in `chrome.storage.sync`, with the rest of the options.
 
 Entries are pruned once they have been untouched for four cache lifetimes (at
 least 90 days), and the cache is capped at 3 000 repos. **Clear topic cache** in
-options empties it now; your notes and your overrides are never touched by it.
+options empties it now; your notes, your overrides and your pins are never
+touched by it.
 
-Two smaller things sit outside all of that, in this browser's own storage for
-github.com rather than in the extension's:
+Three smaller kinds of thing sit outside all of that, in this browser's own
+storage for github.com rather than in the extension's:
 
-- `shelves:open:<owner>` and `shelves:bench:<owner>` in `localStorage` — which
-  shelves you left open, and how far through the untagged repos the workbench
-  has walked. Both are places rather than decisions: losing either costs you one
-  scroll or one repeat of a tab you already closed
+- `shelves:open:<owner>`, `shelves:bench:<owner>` and
+  `shelves:density:<owner>` in `localStorage` — which shelves you left open,
+  how far through the untagged repos the workbench has walked, and whether you
+  read this profile `compact` or `roomy`. All three are places or postures
+  rather than decisions: losing one costs you a scroll, a repeat of a tab you
+  already closed, or one press of a button. Density is here rather than in the
+  synced settings on purpose — the right density depends on the screen you are
+  reading on
+- `shelves:seen:<owner>` in `localStorage` — when you last opened this profile's
+  Repositories tab, which is what `N since you were here` on a shelf header is
+  measured from. Read and written **once per visit**, per profile, and
+  deliberately never synced: *since you were last here* would otherwise mean
+  *since you were last here on any of four machines*, which is not a sentence
+  anyone wants. Losing it costs one visit's worth of that count and nothing else
 - pressing `read N more` writes a single flag to `sessionStorage`, which the next
   load reads and deletes. It is not a setting — it is a decision about this tab,
   taken once — so it never syncs and a reload cannot silently repeat a large read
@@ -675,12 +994,21 @@ a choice. Worth knowing before installing on a shared machine.
   A field that cannot be read is absent, never wrong — but until someone drives
   `facts.js` against a real logged-in repo page (a milestone on the roadmap),
   treat a blank star count as "not verified yet" rather than "no stars".
-- **Topics only, as the axis.** Not language, not stars, not last-pushed —
-  those are filters GitHub already ships. A language or a shared name *is*
-  offered once, as a suggestion, and what it builds is an ordinary shelf holding
-  pinned repos — configuration rather than a second axis.
+- **One axis, however a shelf is written.** Language, stars and last-pushed are
+  filters GitHub already ships, and they are not a second grouping here. What
+  exists instead is configuration: a language or a shared name is offered once
+  as a suggestion and builds an ordinary shelf holding pinned repos, and a rule
+  shelf lets you write `Java = lang:java fork:false` yourself. Both are one more
+  entry in the one list of shelves, tried in your own order.
 - **A repo appears on exactly one shelf.** First match wins, and an override
-  wins before that.
+  wins before that. The shelves it also matched are shown as chips on the row
+  and are not counted anywhere.
+- **A rule can only ask what the answering rung carries.** A repo answered by
+  the topic chips on its row knows its topics and nothing else; a repo read from
+  its own page carries no language and no push date, because GitHub renders both
+  on the client. Those repos are `unjudged` rather than excluded quietly, and
+  the count is on the shelf header — but the shelf really is missing them until
+  a token or a rescan puts the API's answer behind them.
 - **Above ~600 repos** the API path stops paginating; the page path still works.
 - **Rung 4 reads at most 100 repositories in a pass** (`scrapeMax`). The rest
   are counted on a `read N more` button rather than fetched, and the button
@@ -701,9 +1029,18 @@ a choice. Worth knowing before installing on a shared machine.
 | everything in Ungrouped | the repos have no topics yet, or your shelf names do not match any topic. Take the suggestions above the shelves, walk the untagged ones with `N untagged · tag them`, or move a row by hand with its `⠿` grip |
 | a repo sits on a shelf none of its topics name | you moved it there yourself, or accepted a name-or-language suggestion that pinned it. An override outranks every topic — drag it back to the leftovers shelf and the override is deleted |
 | a suggestion offers a shelf you already have | it should not: a topic that is already a shelf, and any repo that already has one, are both excluded. If it happens the shelf label and the topic differ in more than case |
+| a rule shelf is empty | every term is `AND`-ed, so one term nothing satisfies empties the shelf. Check the header for `N unjudged` first — that is the rule not being able to look, which is a different problem from nothing matching. Otherwise take terms off one at a time: on a sparsely tagged collection `topic:` is usually the one doing it |
+| a shelf header says `N unjudged` | that rule asked for a field the answering rung cannot carry, so those repos could not be decided about and are on the leftovers shelf rather than quietly excluded. Repos answered by the chips on their row carry only topics; repos read from their own page carry no language and no push date, because GitHub renders the languages bar and every timestamp on the client. A token, or a rescan that reaches the API, answers both |
+| the toolbar says `unreadable in <shelf>` | a term in that shelf's rule could not be parsed, and it is named rather than dropped. Usually a misspelt field (`topc:ai`) or an age with no unit (`pushed:90` — it needs `90d`, `6m`, `2y`). The rest of the rule still applies, which is why the shelf may look nearly right |
+| a row wears a chip naming a shelf it is not on | that is a shelf it also matched. First match wins the row, so it is shelved once; the chip is where the rest of the answer went. It is not clickable on purpose — moving a repo is the `⠿` grip's job |
+| a pinned row is not pinned on another machine | pins live in this browser against `owner/name`, like your notes and your overrides, and none of the three ever sync |
 | shelves do not appear at all | not on `?tab=repositories`, or GitHub changed its markup — see `src/dom.js` |
 | stale grouping after re-tagging | press **rescan** in the toolbar |
-| `/` does nothing | the cursor is in another field — `/` stands down inside inputs so it never steals a keystroke you meant for GitHub |
+| `/`, `j` or `e` does nothing | the cursor is in a field — every key here stands down inside an input so it never steals a keystroke you meant for GitHub. A modified key (`ctrl`+`J`) is the browser's and is never taken |
+| `7` does nothing but `2` does | there is no seventh shelf. A digit naming no shelf is left alone rather than swallowed |
+| the shelves appear, then re-arrange a moment later | that is the first frame correcting itself. It is drawn from the chips on the page and the cache — the source line says `via page + cache` while it is a guess — and the ladder's real answer re-buckets it. Nothing is wrong, and nothing you typed or opened is lost in the change |
+| a Type or Language filter left the shelves but took my audit filter | a typed query is restored across GitHub's own filters; a by-name filter from the audit is not, because it names repositories the new list may not contain |
+| `compact` came back `roomy` on another machine | density is remembered in this browser, per profile, and deliberately never synced — the right density depends on the screen |
 | a note vanished | it was emptied; an empty note is deleted rather than stored blank. Nothing else removes one |
 | a shelf changed colour | you renamed it. The mark is a hash of the name, which is what lets it be the same on every machine with nothing stored |
 | two shelves look similar | up to twelve shelves they cannot be: twelve distinct hues and twelve distinct glyphs. Past twelve, one of the two channels has to repeat — the *pair* is the identity, so if the colours look alike read the glyph, and if the shapes do read the colour |

@@ -123,7 +123,55 @@ globalThis.Shelves = globalThis.Shelves || {};
     return null;
   };
 
-  S.factsFrom = function factsFrom(doc, fullName) {
+  /* ---- WHICH SOURCE CAN ANSWER WHICH FIELD ------------------------------
+   * `audit.js` has needed this since it learned to denominate a gap per field
+   * per source; `rule.js` needs the identical fact to tell "this repo has no
+   * forks" from "nobody asked about its forks". Two copies of it would drift,
+   * and the drift would be silent in both directions — an audit reporting a
+   * gap nobody could have filled, and a rule shelf quietly excluding repos it
+   * had no opinion about. So it lives HERE, beside the three functions that
+   * build the records it describes.
+   *
+   * `page-chips` is rung 1: topics were read off the profile row and no repo
+   * page was ever fetched, so it can answer for nothing else at all. */
+  const CARRIES = {
+    /* MEASURED against the server's HTML — which is what `scrape()` parses,
+     * and is NOT the hydrated DOM `mark.js` reads. On six real repo pages:
+     * zero `<relative-time>` and zero `a[href*="/search?l="]`. GitHub renders
+     * the languages bar and the timestamps on the client now, so the page rung
+     * genuinely cannot see a language or a push date, and claiming it can made
+     * `lang:python` answer "0 matched, 0 unknown" on a scraped collection —
+     * which reads as "you have no Python" when the truth is "nobody could
+     * look". An honest empty shelf with a stated count of unjudged repos beats
+     * a confident wrong one. */
+    page: ["topics", "description", "license", "homepage", "readme",
+           "archived", "stars", "forks", "fork", "name"],
+    api: ["topics", "description", "language", "license", "homepage",
+          "archived", "updated", "stars", "forks", "fork", "private", "name"],
+    /* THE LIVE DOCUMENT IS NOT THE SERVER'S RESPONSE, and this is the whole
+     * reason the two entries differ. `scrape()` parses what the server sent;
+     * `mark.js` reads the page after GitHub's own scripts have run, and the
+     * languages bar and every timestamp arrive in that second pass. Narrowing
+     * `page` on a measurement taken against the server HTML and then applying
+     * it to the hydrated DOM made the repo-page chip answer `unknown` for
+     * `lang:` and `pushed:` and fall to Ungrouped — the chip disagreeing with
+     * the shelf, which is the one thing the shelf map exists to prevent. */
+    "page-live": ["topics", "description", "language", "license", "homepage",
+                  "readme", "archived", "updated", "stars", "forks", "fork",
+                  "name"],
+    "page-chips": ["topics", "name"],
+  };
+
+  /** @param {string} via  the record's own `via`, or undefined for a bare row */
+  S.carries = function carries(via, field) {
+    const has = CARRIES[via];
+    return !!has && has.indexOf(field) !== -1;
+  };
+  S.CARRIES = CARRIES;
+
+  /** @param {boolean=} live  true when `doc` is the page as the browser has
+   *  finished building it, rather than the response the server sent. */
+  S.factsFrom = function factsFrom(doc, fullName, live) {
     const nest = S.sidebarOf(doc);
     /* NO `|| doc`. With no sidebar found, the three fields that live in it are
      * ABSENT — which is what P.XI asks for and what the canary below can then
@@ -134,7 +182,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     const sidebar = nest || doc.createElement("div");
     const f = {
       name: String(fullName || "").toLowerCase(),
-      via: "page",
+      via: live ? "page-live" : "page",
       topics: S.topicsIn(sidebar),          // measured (charter §7)
       description: description(doc),
       language: language(doc, sidebar),
@@ -248,7 +296,12 @@ globalThis.Shelves = globalThis.Shelves || {};
   const forks = (doc) => counter(doc, "repo-network-counter", "forks");
 
   function license(sidebar) {
-    const a = sidebar.querySelector('a[href*="LICENSE"], a[href*="#license"]');
+    /* `#Apache-2.0-1-ov-file` is the shape GitHub links a licence with now;
+     * neither of the two older spellings matched it, so every scraped record
+     * came back with no licence at all — measured, 5 of 6 real repo pages. */
+    const a = sidebar.querySelector(
+      'a[href*="LICENSE"], a[href*="#license"], a[href*="-ov-file"]'
+    );
     // "MIT license" is the sidebar's own wording; the licence is the first word
     const t = text(a).replace(/\s*licen[cs]e\s*$/i, "");
     return t.slice(0, 40);
@@ -290,9 +343,23 @@ globalThis.Shelves = globalThis.Shelves || {};
     );
   }
 
+  /* MEASURED, on a repo that IS a fork: `span.fork-flag` matched nothing and
+   * `[data-testid="repo-header"], .Layout-main header` matched nothing, so
+   * this returned `false` while the words "forked from" sat in the HTML. A
+   * false here is worse than an absent — `rule.js` treats it as answered, so
+   * `fork:false` confidently kept a fork.
+   *
+   * The class stays as a fast path; the finder is structural, the way the
+   * About panel's is. The phrase alone is not enough (a README may say it), so
+   * the element must both LEAD with it and link to the repo it was forked
+   * from — which is what makes it that line and not prose about it. */
   function isFork(doc) {
     if (doc.querySelector("span.fork-flag, .fork-flag")) return true;
-    return /forked from/i.test(text(doc.querySelector('[data-testid="repo-header"], .Layout-main header')));
+    return [...doc.querySelectorAll("span, p")].some(
+      (e) => e.children.length <= 3 &&
+             /^\s*forked from/i.test(text(e)) &&
+             e.querySelector('a[href^="/"]')
+    );
   }
 
   /* ---- the API's answer, in the same shape ------------------------------ */
@@ -324,6 +391,12 @@ globalThis.Shelves = globalThis.Shelves || {};
       updated: typeof row.updated === "number" ? row.updated : null,
       archived: !!row.archived,
       fork: !!row.fork,
+      /* CLAIMED BY `CARRIES` AND NEVER WRITTEN — so `private:false` matched
+       * every repository on the account and `private:true` matched none, which
+       * on a token-holding account is the whole private half of a collection
+       * silently landing on the wrong side of a rule. The worker has been
+       * sending it all along. */
+      private: !!row.private,
     };
   };
 

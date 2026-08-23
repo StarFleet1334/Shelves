@@ -90,7 +90,19 @@ globalThis.Shelves = globalThis.Shelves || {};
       let host = null;
       let notes = await S.notes.read();
       let overrides = await S.overrides.read();
+      let pins = await S.pins.read();
       const mine = S.isMine();
+
+      /* WHEN THE READER WAS LAST HERE, read before anything is drawn and
+       * stamped exactly once for the visit. Reading it per render would make
+       * "since you were here" mean "since the last time this function ran" —
+       * which, with a progressive render and GitHub's own filters, is a few
+       * hundred milliseconds ago and therefore always zero. */
+      const now = Date.now();
+      /* Read before the stamp, and the stamp is a no-op after the first time
+       * — a re-entry from GitHub's own filters must not become "last time". */
+      const lastSeen = S.seen.read(owner);
+      S.seen.stamp(owner, now);
 
       try {
         const warm = await S.cache.read();
@@ -105,7 +117,8 @@ globalThis.Shelves = globalThis.Shelves || {};
         curFacts = early;
         if (early.some((f) => f.topics.length)) {
           host = S.render({
-            rows, names, settings, sourceUl, owner, notes, overrides, mine,
+            rows, names, settings, sourceUl, owner, notes, overrides, pins,
+            mine, now, lastSeen,
             topics: curTopics,
             facts: curFacts,
             /* P.IV, and it is not a formality: this line must never name a
@@ -176,12 +189,12 @@ globalThis.Shelves = globalThis.Shelves || {};
         /* ══ PHASE TWO — re-bucket, never re-render ═════════════════════════
          * The host is not replaced. See `host.rebucket` in view.js for what
          * that buys and what swapping would have cost. */
-        host.rebucket({ topics, facts, notes, overrides, source, warning,
+        host.rebucket({ topics, facts, notes, overrides, pins, source, warning,
                         health, deferred });
       } else {
         host = S.render({
           rows, topics, facts, names, notes, settings, sourceUl, source, warning,
-          health, owner, deferred, overrides, mine,
+          health, owner, deferred, overrides, pins, mine, now, lastSeen,
           handlers: shelfHandlers(),
         });
         sourceUl.replaceWith(host);
@@ -247,6 +260,16 @@ globalThis.Shelves = globalThis.Shelves || {};
              * shelf has gone (a filter, a re-render) the next load still puts
              * the row in the right place. */
             if (li) S.moveRow(host, li, label);
+          },
+
+          /* ---- the top of the shelf ------------------------------------
+           * One key, one row re-homed, no reload — the same unit as a move,
+           * because it is the same kind of decision. */
+          pin: async (name, li) => {
+            const { ok, pins: after } = await S.pins.toggle(name);
+            if (!ok) return;
+            pins = after;
+            if (li) S.repin(host, li, !!after[String(name).toLowerCase()]);
           },
 
           /* ---- a suggestion becomes an ordinary shelf ------------------
@@ -406,7 +429,8 @@ globalThis.Shelves = globalThis.Shelves || {};
    * `shelfMap` joins them for a sharper reason: this page WRITES it on every
    * render, so without the exemption every render would trigger a reload,
    * which would render, which would write it again. */
-  const QUIET = ["topicCache", "repoFacts", "notes", "shelfMap", "overrides"];
+  const QUIET = ["topicCache", "repoFacts", "notes", "shelfMap", "overrides",
+                 "pins"];
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "sync" && area !== "local") return;

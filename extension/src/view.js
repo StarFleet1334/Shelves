@@ -22,7 +22,7 @@ globalThis.Shelves = globalThis.Shelves || {};
    * shelve a repo with no topics at all, which on a real untagged account is
    * most of them.
    */
-  S.bucketFor = function bucketFor(topics, settings, override) {
+  S.bucketFor = function bucketFor(topics, settings, override, facts, specs) {
     const own = String(override == null ? "" : override).trim();
     if (own) {
       /* A CONFIGURED SHELF OWNS THE SPELLING OF ITS OWN NAME. An override is
@@ -32,33 +32,103 @@ globalThis.Shelves = globalThis.Shelves || {};
        * their own, beside the one they were put on. Matching case-insensitively
        * and returning the CONFIGURED spelling keeps one shelf one shelf,
        * without rewriting anything the reader stored. */
-      const same = (settings.groups || [])
+      const same = (specs || S.shelfSpecs(settings))
+        .map((sp) => sp.label)
         .concat([settings.otherLabel])
         .find((g) => g && g.toLowerCase() === own.toLowerCase());
       return same || own;
     }
     if (settings.groups.length) {
-      const hit = settings.groups.find((g) => topics.indexOf(g.toLowerCase()) !== -1);
-      return hit || settings.otherLabel;
+      /* FIRST MATCH STILL WINS, and a rule shelf is tried exactly where its
+       * entry sits in the list — so the reader's order is the precedence and
+       * there is nothing new to learn. `specs` is passed in when the caller
+       * has already parsed them (once per render, per the roadmap); parsing
+       * here is the fallback for the callers that have one repo and no list. */
+      const list = specs || S.shelfSpecs(settings);
+      const hit = list.find((sp) =>
+        sp.kind === "rule"
+          ? S.matchRule(sp.rule, facts, topics).yes
+          : topics.indexOf(sp.label.toLowerCase()) !== -1);
+      return hit ? hit.label : settings.otherLabel;
     }
     // No configured shelves: auto-group by the repo's first topic, alphabetical,
     // so the same repo always lands on the same shelf between loads.
     return topics.length ? topics.slice().sort()[0] : settings.otherLabel;
   };
 
-  S.bucket = function bucket(rows, topics, settings, names, overrides) {
+  /* ---- THE SHELVES A ROW ALSO MATCHED ------------------------------------
+   * First match wins the row, and it has to: a repo on two shelves is two
+   * counts that do not add up and a page you cannot scan once. But the
+   * information that rule throws away is real — `wiremock-api` is on `tooling`
+   * AND would have been on `java`, and knowing that is most of what a reader
+   * wants when they wonder why a shelf looks thin.
+   *
+   * So the losing matches are given back as chips. They are drawn, not
+   * clickable-to-move: pressing one would mean "put it there", which is what
+   * the grip is for and would quietly become a second way to write an
+   * override. */
+  S.siblingsFor = function siblingsFor(topics, settings, facts, specs, won) {
+    const list = specs || S.shelfSpecs(settings);
+    return list
+      .filter((sp) => sp.label !== won)
+      .filter((sp) =>
+        sp.kind === "rule"
+          ? S.matchRule(sp.rule, facts, topics).yes
+          : (topics || []).indexOf(sp.label.toLowerCase()) !== -1)
+      .map((sp) => sp.label);
+  };
+
+  S.bucket = function bucket(rows, topics, settings, names, overrides, facts, opts) {
     const ov = overrides || {};
     const who = names || [];
+    const fs = facts || [];
+    /* PARSED ONCE for the whole page, not once per row — which is the roadmap's
+     * own wording and the difference between a rule shelf and a search. */
+    const specs = S.shelfSpecs(settings);
     const buckets = new Map();
+    /* HOW MANY REPOS A RULE COULD NOT JUDGE. A term naming a field this repo's
+     * SOURCE cannot carry is not false, it is unanswered — and a shelf that
+     * quietly drops those is a shelf whose contents the reader cannot explain.
+     * Counted here, stated on the header. */
+    const unjudged = new Map();
+    const pinned = (opts && opts.pins) || {};
     rows.forEach((li, i) => {
-      const key = S.bucketFor(topics[i] || [], settings, ov[who[i]]);
+      const key = S.bucketFor(topics[i] || [], settings, ov[who[i]], fs[i], specs);
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push(li);
+      li.dataset.shPin = pinned[who[i]] ? "1" : "";
+      /* COUNTED OVER EVERY ROW, not only the ones that reached the leftovers
+       * shelf. A repo this rule could not judge may still have matched an
+       * EARLIER shelf and be sitting there — and it is still a repo this rule
+       * has no opinion about, which is what the number claims to say. */
+      specs.forEach((sp) => {
+        if (sp.kind !== "rule" || sp.label === key) return;
+        if (S.matchRule(sp.rule, fs[i], topics[i] || []).unknown) {
+          unjudged.set(sp.label, (unjudged.get(sp.label) || 0) + 1);
+        }
+      });
     });
 
     let order;
     if (settings.groups.length) {
-      order = settings.groups.filter((g) => buckets.has(g));
+      /* ONE SHELF PER LABEL. Two entries sharing a name — a topic `ai` beside
+       * a rule `ai = lang:python`, or two rules truncated to the same 60
+       * characters — built the same `<details>` twice, and the second build
+       * re-parented the rows out of the first: a phantom empty shelf with a
+       * non-zero count printed on it. Reachable without hand-editing anything,
+       * because a suggestion is deduped against the whole entry string. */
+      const seen = new Set();
+      order = specs
+        .map((sp) => sp.label)
+        .filter((g) => !seen.has(g) && seen.add(g))
+        /* A RULE SHELF THAT MATCHED NOTHING IS STILL DRAWN IF IT HAS SOMETHING
+         * TO SAY. `an honest empty shelf with a stated count of unjudged
+         * repos beats a confident wrong one` — but a shelf with no members was
+         * dropped from the order, so on exactly the collection that motivated
+         * the rule (scraped, no language, no dates) the page said nothing at
+         * all. It is drawn empty, carrying its count. */
+        .filter((g) => buckets.has(g) || unjudged.get(g));
+      order.forEach((g) => { if (!buckets.has(g)) buckets.set(g, []); });
     } else {
       order = Array.from(buckets.keys())
         .filter((k) => k !== settings.otherLabel)
@@ -76,7 +146,29 @@ globalThis.Shelves = globalThis.Shelves || {};
       .sort((a, b) => a.localeCompare(b))
       .forEach((k) => order.push(k));
     if (buckets.has(settings.otherLabel)) order.push(settings.otherLabel); // always last
-    return { buckets, order };
+
+    /* PINNED ROWS RISE, AND NOTHING ELSE MOVES. A stable partition rather than
+     * a sort: GitHub's own order inside a shelf is the reader's `Sort` setting
+     * and is not ours to rearrange — the only claim being made here is "these
+     * few first". */
+    buckets.forEach((list, label) => {
+      const up = list.filter((li) => li.dataset.shPin === "1");
+      if (!up.length || up.length === list.length) return;
+      /* IN THE ORDER THEY WERE PINNED, which is the order the reader watched
+       * them rise in. Sorting the pinned block by GitHub's source order
+       * instead meant the page rearranged itself on the next load: pin `c`
+       * then `a` and the session showed `c,a` while the reload showed `a,c`.
+       * The store keeps a stamp per pin for exactly this; a legacy `true`
+       * sorts first, since it was pinned before any of them. */
+      const at = (li) => {
+        const v = pinned[li.dataset.shName];
+        return typeof v === "number" ? v : 0;
+      };
+      up.sort((a, b) => at(a) - at(b));
+      buckets.set(label, up.concat(list.filter((li) => li.dataset.shPin !== "1")));
+    });
+
+    return { buckets, order, specs, unjudged };
   };
 
   function button(label, title) {
@@ -306,6 +398,34 @@ globalThis.Shelves = globalThis.Shelves || {};
     return wrap;
   };
 
+  /* ---- the shelves this row ALSO matched ---------------------------------
+   * Drawn into the note margin rather than given a line of its own, for the
+   * reason that element already exists: on a row with no note it is parked in
+   * the 24px of padding GitHub leaves under every row, so this costs the row
+   * NO HEIGHT — which is the difference between information and a redesign.
+   * (Measured once already, at length: 22px per row over 77 rows is a screen
+   * and a quarter of scrolling.) */
+  function siblingChips(labels) {
+    const wrap = document.createElement("span");
+    wrap.className = "sh-sibs";
+    labels.slice(0, 4).forEach((label) => {
+      const chip = document.createElement("span");
+      chip.className = "sh-sib";
+      chip.textContent = label;
+      wrap.append(chip);
+    });
+    if (labels.length > 4) {
+      const more = document.createElement("span");
+      more.className = "sh-sib sh-sib-more";
+      more.textContent = "+" + (labels.length - 4);
+      wrap.append(more);
+    }
+    wrap.title = "Also matched: " + labels.join(", ") +
+      ". First match wins the row, so it is shelved once — this is where the " +
+      "rest of the answer went.";
+    return wrap;
+  }
+
   function margin(li, name, note, handlers) {
     if (li.dataset.shMargin === "1") {
       const held = li.querySelector(".sh-margin");
@@ -385,6 +505,25 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
   }
 
+  /** Pinning moves the row to the top of the shelf it is already on; unpinning
+   *  drops it back below the pinned ones. The write has happened; this is the
+   *  page catching up, exactly as `moveRow` is for a move. */
+  S.repin = function repin(host, li, on) {
+    li.dataset.shPin = on ? "1" : "";
+    const ul = li.parentElement;
+    if (!ul) return false;
+    if (on) {
+      /* Below the rows already pinned, so pinning three in a row does not
+       * silently reverse them. */
+      const after = [...ul.children].filter((x) => x.dataset.shPin === "1" && x !== li);
+      ul.insertBefore(li, after.length ? after[after.length - 1].nextSibling : ul.firstChild);
+    } else {
+      const first = [...ul.children].find((x) => x.dataset.shPin !== "1" && x !== li);
+      ul.insertBefore(li, first || null);
+    }
+    return true;
+  };
+
   function mover(li, name, handlers) {
     const wrap = document.createElement("span");
     wrap.className = "sh-move";
@@ -431,6 +570,28 @@ globalThis.Shelves = globalThis.Shelves || {};
       if (!labels.length) return;
       const menu = document.createElement("span");
       menu.className = "sh-shelflist";
+
+      /* THE TOP OF THE SHELF IS PART OF WHERE A REPO GOES, so it is offered
+       * by the same control that moves it rather than getting a second
+       * affordance of its own. It is the first entry because it is the one
+       * that acts on the shelf the row is already on. */
+      if (handlers.pin) {
+        const up = document.createElement("button");
+        up.type = "button";
+        up.className = "sh-shelfpick sh-pinpick";
+        const on = li.dataset.shPin === "1";
+        up.textContent = on ? "⚑ unpin" : "⚑ pin to top";
+        up.title = on
+          ? "Let it sit in GitHub's own order again"
+          : "Keep this one at the top of its shelf. Held in this browser.";
+        up.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          closeMenus(host);
+          handlers.pin(name, li);
+        });
+        menu.append(up);
+      }
       const here = (li.closest("details.sh-shelf") || {}).querySelector
         ? (li.closest("details.sh-shelf").querySelector(".sh-name") || {}).textContent
         : "";
@@ -641,6 +802,10 @@ globalThis.Shelves = globalThis.Shelves || {};
      * so a second pass over a different row set would stamp every row with the
      * wrong repository — and the drop target, the override handler and the
      * audit's by-name filter all address rows by that stamp. */
+    /* ONE CLOCK FOR THE WHOLE RENDER, so two shelves cannot disagree about
+     * what "stale" means by a few milliseconds. */
+    const now = ctx.now || Date.now();
+    const lastSeen = ctx.lastSeen || 0;
     let health = ctx.health;
     let topics = ctx.topics;
     let facts = ctx.facts || [];
@@ -649,8 +814,24 @@ globalThis.Shelves = globalThis.Shelves || {};
     let source = ctx.source;
     let warning = ctx.warning;
     let deferred = ctx.deferred;
-    let { buckets, order } = S.bucket(rows, topics, settings, names, overrides);
+    let pins = ctx.pins || {};
+    let { buckets, order, specs, unjudged } =
+      S.bucket(rows, topics, settings, names, overrides, facts, { pins });
     const open = S.collapse.read(owner);
+
+    /* Repainted on the second pass, because which shelves a row also matched
+     * is one of the things the ladder changes its mind about. */
+    const paintSiblings = (li, i) => {
+      const held = li.querySelector(".sh-margin");
+      if (!held) return;
+      const had = held.querySelector(".sh-sibs");
+      if (had) had.remove();
+      if (!settings.groups.length) return;   // auto-grouping has one shelf per topic
+      const won = S.bucketFor(topics[i] || [], settings,
+                              overrides[names[i]], facts[i], specs);
+      const also = S.siblingsFor(topics[i] || [], settings, facts[i], specs, won);
+      if (also.length) held.append(siblingChips(also));
+    };
 
     /* Every row is told what it knows about itself ONCE, here, while we still
      * have the parallel arrays. After this the row is self-describing and the
@@ -674,6 +855,7 @@ globalThis.Shelves = globalThis.Shelves || {};
           !held.querySelector(".sh-move")) {
         held.insertBefore(mover(li, name, handlers), held.firstChild);
       }
+      paintSiblings(li, i);
       li.dataset.shName = name;      // how the audit's findings address a row
       li.dataset.shHay = S.haystack(li.dataset.shText, facts[i], note);
     });
@@ -798,6 +980,19 @@ globalThis.Shelves = globalThis.Shelves || {};
       const tagged = topics.filter((t) => t && t.length).length;
       note.append(rows.length + " repos · " + order.length + " shelves · " +
                   tagged + " tagged · via " + source);
+      /* A RULE THAT CANNOT BE READ IS SAID OUT LOUD. `lang:python topc:ai` is a
+       * typo, and a shelf that silently ignores a third of itself leaves the
+       * reader looking at contents they cannot explain — the same class of
+       * silence P.IV exists to forbid. */
+      const broken = (specs || [])
+        .filter((sp) => sp.kind === "rule" && sp.rule.bad.length)
+        .map((sp) => sp.label + ": " + sp.rule.bad.join(" "));
+      if (broken.length) {
+        const b = document.createElement("span");
+        b.className = "sh-warn";
+        b.textContent = "unreadable in " + broken.join(" · ");
+        note.append(" · ", b);
+      }
       if (warning) {
         const w = document.createElement("span");
         w.className = "sh-warn";
@@ -837,7 +1032,8 @@ globalThis.Shelves = globalThis.Shelves || {};
     const paintSuggestions = () => {
       const placed = new Set(
         names.filter((n, i) =>
-          n && S.bucketFor(topics[i] || [], settings, overrides[n]) !== settings.otherLabel)
+          n && S.bucketFor(topics[i] || [], settings, overrides[n], facts[i], specs) !==
+            settings.otherLabel)
           .map((n) => n.toLowerCase())
       );
       const sugs = (handlers.addShelf && ctx.mine !== false)
@@ -998,6 +1194,72 @@ globalThis.Shelves = globalThis.Shelves || {};
       return bench;
     };
 
+    /* ---- WHAT A SHELF IS WORTH -------------------------------------------
+     * A count is the least a shelf header could say. The records are already
+     * here — `facts.js` harvests ten fields from the request the ladder was
+     * making anyway — and three of them answer the questions a reader actually
+     * has about a group of repositories: how much of my collection is this,
+     * how much of it has gone cold, and what moved.
+     *
+     * `N since you were here` IS THE ONE GITHUB CANNOT SAY. It knows when
+     * every repo was pushed; it has no idea when you last looked. That
+     * sentence only exists in something living in your browser.
+     *
+     * IT SAYS NOTHING RATHER THAN ZERO. Rung 1 records carry no stars and no
+     * dates, so on a page the chips answered there is no weight to show — and
+     * `★ 0 · 0 stale` would be a statement about the collection when it is a
+     * statement about the source. `carries()` is the same test the audit uses
+     * for the same reason. */
+    const STALE_DAYS = 365;
+    const weighOf = (list) => {
+      let stars = 0, hasStars = false, stale = 0, fresh = 0, dated = 0;
+      list.forEach((li) => {
+        const i = rows.indexOf(li);
+        const f = i >= 0 ? facts[i] : null;
+        if (!f) return;
+        if (S.carries(f.via, "stars") && typeof f.stars === "number") {
+          stars += f.stars;
+          hasStars = true;
+        }
+        if (S.carries(f.via, "updated") && typeof f.updated === "number") {
+          dated++;
+          if ((now - f.updated) / 86400000 > STALE_DAYS) stale++;
+          if (lastSeen && f.updated > lastSeen) fresh++;
+        }
+      });
+      return { stars, hasStars, stale, fresh, dated };
+    };
+
+    const paintWeight = (d, label) => {
+      const sum = d.querySelector(".sh-sum");
+      if (!sum) return;
+      const had = sum.querySelector(".sh-weight");
+      if (had) had.remove();
+      const w = weighOf(buckets.get(label) || []);
+      const bits = [];
+      if (w.hasStars && w.stars) bits.push("\u2605 " + w.stars);
+      if (w.dated && w.stale) bits.push(w.stale + " stale");
+      if (w.fresh) bits.push(w.fresh + " since you were here");
+      /* The rule could not judge some repos, and they are sitting in the
+       * leftovers shelf because of it. Said here, on the shelf that lost
+       * them, rather than in a warning about the whole page. */
+      const missed = unjudged && unjudged.get(label);
+      if (missed) bits.push(missed + " unjudged");
+      if (!bits.length) return;
+      const el = document.createElement("span");
+      el.className = "sh-weight";
+      el.textContent = bits.join(" · ");
+      el.title =
+        (w.hasStars ? "Stars across this shelf. " : "") +
+        (w.dated ? "Stale means nothing pushed in a year. " : "") +
+        (w.fresh ? "Pushed since your last visit to this page. " : "") +
+        (missed ? "Unjudged repositories named a field their source could " +
+                  "not answer, so this rule could not decide about them." : "");
+      const count = sum.querySelector(".sh-count");
+      if (count) sum.insertBefore(el, count);
+      else sum.append(el);
+    };
+
     /* BUILT BY A FUNCTION so the second pass can create a shelf the cache
      * never knew about without rebuilding the page around it. */
     const buildShelf = (label, list) => {
@@ -1041,6 +1303,7 @@ globalThis.Shelves = globalThis.Shelves || {};
       if (bench) sum.append(bench);
 
       d.appendChild(sum);
+      paintWeight(d, label);
 
       const ul = document.createElement("ul");
       ul.className = sourceUl.className;
@@ -1116,11 +1379,36 @@ globalThis.Shelves = globalThis.Shelves || {};
        * identity the finished page then disagrees with, which is the one
        * failure the map exists to prevent. */
       if (ctx.provisional) return;
+      /* WHICH SHELF EACH REPO LANDED ON, not just which shelves exist.
+       *
+       * `names` was written here and read by NOTHING — the most sensitive
+       * thing in the store, persisted for a feature that was never built. It
+       * is replaced by the answer the repo page actually needs.
+       *
+       * The chip used to re-derive its shelf from the page it is standing on,
+       * which worked while a shelf was one topic and breaks the moment a shelf
+       * is a rule: at the ~160ms the mark is drawn, GitHub has not yet
+       * rendered the languages bar or the timestamps — they arrive with its
+       * own client-side pass — so `lang:java` was unanswerable and the chip
+       * fell to Ungrouped on a repo the profile had on `Java`. Measured.
+       *
+       * Re-deriving was always the second-best answer. This map exists because
+       * "the page that knows writes it down, and the pages that cannot work it
+       * out read it rather than guessing a different answer" — and a shelf is
+       * now exactly such a thing. */
+      /* `on`, not `at` — `shelfmap.write` stamps its own `at` with the time
+       * the map was written, and the collision silently made this a number. */
+      const on = {};
+      order.forEach((label) => {
+        (buckets.get(label) || []).forEach((li) => {
+          if (li.dataset.shName) on[li.dataset.shName] = label;
+        });
+      });
       Promise.resolve(
         S.shelfmap.write(owner, {
           order,
           counts: Object.fromEntries(order.map((l) => [l, buckets.get(l).length])),
-          names: names.filter(Boolean),
+          on,
         })
       ).catch(() => {});
     };
@@ -1304,6 +1592,14 @@ globalThis.Shelves = globalThis.Shelves || {};
       if (next.health != null) health = next.health;
       if (next.deferred != null) deferred = next.deferred;
       delete host.dataset.provisional;
+      /* AND ON THE CONTEXT, not only on the element. `publishMap()` reads
+       * `ctx.provisional` to refuse publishing a guess — and `ctx` is still
+       * the object phase one was called with, so clearing the attribute alone
+       * left the guard armed for good. The shelf map was silently never
+       * written on any page that rendered progressively, which is every page
+       * with a warm cache: measured, `shelfMap` held zero owners after a full
+       * settled run, and the repo-page chip therefore had nothing to read. */
+      ctx.provisional = false;
 
       /* A menu open across a re-bucket keeps its element and loses the
        * `data-menu` flag that stops its shelf clipping it — the scar, exactly,
@@ -1313,9 +1609,12 @@ globalThis.Shelves = globalThis.Shelves || {};
       const was = { q: find.value, only: onlySet,
                     on: host.dataset.filtering === "1" };
 
-      const rb = S.bucket(rows, topics, settings, names, overrides);
+      if (next.pins) pins = next.pins;
+      const rb = S.bucket(rows, topics, settings, names, overrides, facts, { pins });
       buckets = rb.buckets;
       order = rb.order;
+      specs = rb.specs;
+      unjudged = rb.unjudged;
       marks = S.identity(order, settings.otherLabel);
       untagged = names.filter((n, i) => n && !(topics[i] || []).length);
       vdata = S.vocabulary(topics, names);
@@ -1371,6 +1670,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         if (old) old.remove();
         const bench = makeBench(label);
         if (sum && bench) sum.append(bench);
+        paintWeight(d, label);
       });
 
       // 5. what each row knows about itself
@@ -1379,6 +1679,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         const note = notes[name] || "";
         const held = li.querySelector(".sh-margin");
         if (held) paintNote(held, note);
+        paintSiblings(li, i);
         li.dataset.shHay = S.haystack(li.dataset.shText || "", facts[i], note);
       });
 

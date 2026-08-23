@@ -16,7 +16,8 @@ const vm = require("vm");
 const { JSDOM } = require("jsdom");
 
 const EXT = path.join(__dirname, "..", "extension");
-const CONTENT = ["src/store.js", "src/dom.js", "src/facts.js", "src/topics.js",
+const CONTENT = ["src/store.js", "src/dom.js", "src/facts.js", "src/rule.js",
+                 "src/topics.js",
                  "src/vocab.js", "src/audit.js", "src/view.js", "src/mark.js",
                  "src/warm.js", "src/main.js"];
 
@@ -141,6 +142,14 @@ function repoPage(repo, owner, name) {
 /* ---- the chrome.* stub ------------------------------------------------- */
 
 function makeChrome(store, onMessage) {
+  /* `onChanged` WAS A NO-OP, AND THAT MADE THE QUIET LIST UNTESTABLE.
+   * main.js reloads the page on any storage key it did not expect, and the
+   * exemption list is the only thing standing between "the reader pinned a
+   * repo" and "the page reloaded and took their scroll, their filter and
+   * their open shelves with it". A stub that never fires cannot tell a
+   * correct list from a forgotten entry — and one entry was forgotten.
+   * Real enough to fire, which is all it takes. */
+  const listeners = [];
   const area = (name) => ({
     get(defaults, cb) {
       const out = { ...defaults };
@@ -151,6 +160,11 @@ function makeChrome(store, onMessage) {
     },
     set(obj, cb) {
       store[name] = { ...(store[name] || {}), ...obj };
+      const changes = {};
+      Object.keys(obj).forEach((k) => { changes[k] = { newValue: obj[k] }; });
+      setTimeout(() => {
+        listeners.forEach((fn) => { try { fn(changes, name); } catch (e) {} });
+      }, 0);
       setTimeout(() => cb && cb(), 0);
     },
   });
@@ -165,7 +179,7 @@ function makeChrome(store, onMessage) {
     storage: {
       sync: area("sync"),
       local: area("local"),
-      onChanged: { addListener() {} },
+      onChanged: { addListener(fn) { listeners.push(fn); } },
     },
   };
 }
@@ -223,6 +237,10 @@ function bootWorker(fetchImpl, counters) {
  *   page2       [{...}] optional second page
  *   apiRepos    what the API answers with, or a number for an HTTP error
  *   overrides   seed for local `overrides` — { "owner/name": "shelf" }
+ *   pins        seed for local `pins` — { "owner/name": true }
+ *
+ * The returned `reloads` counts every `location.reload()` the page
+ * attempted — the only way to see main.js's QUIET list working.
  *   apiPublic   the same, for the UNAUTHENTICATED door only — so a run
  *               can have a dead token and a working public endpoint
  *   settings    seed for chrome.storage.sync
@@ -237,7 +255,8 @@ function build(opts) {
              topicCache: opts.legacyCache || {},
              shelfMap: opts.shelfMap || {},
              notes: opts.notes || {},
-             overrides: opts.overrides || {} },
+             overrides: opts.overrides || {},
+             pins: opts.pins || {} },
   };
   const counters = { api: 0, lastAuth: false, pages: [], scraped: [] };
 
@@ -257,10 +276,23 @@ function build(opts) {
                   opts.page2 ? "/" + owner + "?tab=repositories&page=2" : "",
                   opts.viewer);
 
+  /* RELOADS ARE COUNTED, because the QUIET list in main.js is the only thing
+   * standing between "the reader pinned a repo" and "the page reloaded and
+   * took their scroll, their filter and their open shelves with it" — and a
+   * forgotten entry there is invisible from the DOM. jsdom will not let a test
+   * stub `location.reload` (non-configurable), but it announces every attempt
+   * on the virtual console as a navigation it did not implement. */
+  const { VirtualConsole } = require("jsdom");
+  const vc = new VirtualConsole();
+  const reloads = { n: 0 };
+  vc.on("jsdomError", (e) => {
+    if (/Not implemented: navigation/i.test(String(e && e.message))) reloads.n++;
+  });
   const dom = new JSDOM(html, {
     url,
     runScripts: "dangerously",
     pretendToBeVisual: true,
+    virtualConsole: vc,
   });
   const win = dom.window;
 
@@ -330,7 +362,7 @@ function build(opts) {
     win.document.body.appendChild(el);
   }
 
-  return { win, store, counters, dom };
+  return { win, store, counters, dom, reloads };
 }
 
 /** Reads the rendered shelves back out of the page. */

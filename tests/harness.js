@@ -1049,6 +1049,11 @@ const SCENARIOS = [
       w.win.localStorage.getItem("shelves:open:octo"));
     assert(ctx, !Object.keys(w.store.local.shelfMap || {}).length,
       "nor publish a shelf map another page would colour a chip from");
+    /* THE COMPLEMENT MATTERS MORE THAN THE GUARD. `publishMap()` reads
+       `ctx.provisional`, and `ctx` is still phase one's object — so clearing
+       the attribute alone left the guard armed for ever and the map was never
+       written at all. Measured on the real page: zero owners after a full
+       settled run, and a repo-page chip with nothing to read. */
 
     /* THE READER CAN USE IT, and what they do must survive the correction. */
     type(w.win, "known");
@@ -1095,6 +1100,14 @@ const SCENARIOS = [
       "one host, always");
     assert(ctx, w.win.document.querySelectorAll("#shelves-host li .sh-margin").length === 4,
       "and one margin per row - a second pass must not double the furniture");
+
+    const map = (w.store.local.shelfMap || {})["octo"];
+    assert(ctx, map && Array.isArray(map.order) && map.order.length,
+      "and the FINISHED page publishes its map, which the guard above must " +
+      "not outlive: " + JSON.stringify(w.store.local.shelfMap));
+    assert(ctx, map && map.on && map.on["octo/slow-c"] === "later",
+      "carrying which shelf each repo landed on, got: " +
+      JSON.stringify((map || {}).on));
     ctx.info = "shelved from cache at first frame, re-bucketed in place, filter kept";
   }),
 
@@ -1359,6 +1372,401 @@ const SCENARIOS = [
     assert(ctx, !ctrl.defaultPrevented, "and a modified key is the browser's");
 
     ctx.info = "/ j k 1-9 e c — focus moves, digits open, fields and modifiers untouched";
+  }),
+
+  check("rule-shelf - a shelf may be a question, not only a word",
+    async (ctx) => {
+    /* Every shelf until now was one topic string matched literally — the right
+       default, and the whole answer for a well-tagged collection. It cannot
+       express the shelf people describe out loud: *the Python ones I still
+       work on*. That is three fields and a date, and `facts.js` already
+       harvests all four from the request the ladder was making anyway. */
+    const day = 86400000;
+    const now = Date.now();
+    /* `pushed_at` is an ISO string in GitHub's body and `background.js` parses
+       it — a number here reaches `Date.parse` as "1756…" and comes back null,
+       which is a fixture that quietly tests nothing. */
+    const ago = (d) => new Date(now - d * day).toISOString();
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: {
+        groups: ["Live Python = topic:ai lang:python fork:false pushed:<90d",
+                 "misc"],
+      },
+      apiRepos: [
+        { name: "live", topics: ["ai"], language: "Python",
+          updated: ago(10) },
+        { name: "cold", topics: ["ai"], language: "Python",
+          updated: ago(400) },
+        { name: "wrong-lang", topics: ["ai"], language: "Go", updated: ago(1) },
+        { name: "a-fork", topics: ["ai"], language: "Python", fork: true,
+          updated: ago(1) },
+        { name: "plain", topics: ["misc"], updated: ago(1) },
+      ],
+      repos: [
+        { name: "live", topics: ["ai"] }, { name: "cold", topics: ["ai"] },
+        { name: "wrong-lang", topics: ["ai"] }, { name: "a-fork", topics: ["ai"] },
+        { name: "plain", topics: ["misc"] },
+      ],
+    });
+    await settle(1600);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+    const b = byLabel(v);
+
+    /* THE SHELF IS NAMED BY ITS LABEL, NOT BY ITS EXPRESSION. `Name = expr` —
+       the separator is `=` because every term inside already uses `:`. */
+    assert(ctx, b["Live Python"], "the shelf wears its name, not its rule: " +
+      v.shelves.map((x) => x.label).join(" | "));
+    if (!b["Live Python"]) return;
+    assert(ctx, b["Live Python"].count === 1,
+      "only the repo that satisfies EVERY term, got " + b["Live Python"].count +
+      " (" + (b["Live Python"].repos || []).join() + ")");
+    assert(ctx, (b["Live Python"].repos || []).join() === "live",
+      "and it is the right one, got: " + (b["Live Python"].repos || []).join());
+
+    /* A plain topic entry beside a rule, in one list, in the reader's order. */
+    assert(ctx, b.misc && b.misc.count === 1,
+      "a topic shelf still works beside a rule one, got " + ((b.misc || {}).count));
+    assert(ctx, b.Ungrouped && b.Ungrouped.count === 3,
+      "and everything the rule refused falls to the leftovers shelf, got " +
+      ((b.Ungrouped || {}).count));
+
+    /* A TERM NOBODY CAN PARSE IS NAMED, NOT DROPPED. A shelf that silently
+       ignores a third of itself leaves the reader unable to explain what they
+       are looking at. */
+    const bad = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["Oops = lang:python topc:ai pushed:90"] },
+      apiRepos: [{ name: "x", topics: [], language: "Python" }],
+      repos: [{ name: "x", topics: [] }],
+    });
+    await settle(1400);
+    const bv = readShelves(bad.win);
+    assert(ctx, bv && /unreadable in Oops/.test(bv.note),
+      "the toolbar names the terms it could not read, got: " + (bv || {}).note);
+    assert(ctx, bv && /topc:ai/.test(bv.note) && /pushed:90/.test(bv.note),
+      "both of them - a bare number is not an age, got: " + (bv || {}).note);
+    /* ---- THE FOUR WAYS A RULE LIED, EACH MEASURED ON THE REAL COLLECTION.
+       A term that quietly means something other than what it says is worse
+       than one that refuses: the shelf still looks right. */
+    const R = w.win.Shelves;
+    const rec = (o) => Object.assign(
+      { via: "api", name: "starfleet1334/x", topics: [], language: "",
+        license: "", stars: 0, forks: 0, updated: now, archived: false,
+        fork: false, private: false }, o);
+    const hits = (expr, f) => R.matchRule(R.parseRule("x = " + expr), f, f.topics).yes;
+
+    /* 1. `lang:` was a SUBSTRING, so `lang:java` held 26 Java repos and 2
+          JavaScript ones — a Java shelf of 28. `lang:c` is the same trap
+          waiting for C++, C#, CSS and Clojure. */
+    assert(ctx, hits("lang:java", rec({ language: "Java" })), "Java is Java");
+    assert(ctx, !hits("lang:java", rec({ language: "JavaScript" })),
+      "but JavaScript is not Java");
+    assert(ctx, !hits("lang:c", rec({ language: "C++" })), "nor is C++ C");
+
+    /* 2. `name:` matched `owner/name`, so on an account called StarFleet1334
+          the term `name:star` matched all 54 rows. */
+    assert(ctx, !hits("name:star", rec({ name: "starfleet1334/2com" })),
+      "the owner is in every name and is not part of the repo's");
+    assert(ctx, hits("name:2com", rec({ name: "starfleet1334/2com" })),
+      "the repo's own name still matches");
+
+    /* 3. `private` was listed as carried and never written, so `private:false`
+          matched every repository on the account and `private:true` matched
+          none — the whole private half of a collection on the wrong side. */
+    assert(ctx, hits("private:true", rec({ private: true })),
+      "a private repo is private");
+    assert(ctx, !hits("private:false", rec({ private: true })),
+      "and is not public");
+
+    /* 4. A FIELD THE SOURCE CANNOT SEE IS UNKNOWN, NOT EMPTY. Measured on six
+          real repo pages: the server HTML `scrape()` parses carries zero
+          `<relative-time>` and zero language links — GitHub renders both on
+          the client. Claiming otherwise made `lang:python` answer "0 matched,
+          0 unknown" on a scraped collection, which reads as "you have no
+          Python" when the truth is "nobody could look". */
+    const scraped = { via: "page", name: "o/x", topics: [], language: "" };
+    assert(ctx, R.matchRule(R.parseRule("x = lang:python"), scraped, []).unknown,
+      "a scraped record cannot answer for its language");
+    assert(ctx, R.matchRule(R.parseRule("x = pushed:<90d"), scraped, []).unknown,
+      "nor for when it was pushed");
+    assert(ctx, !R.matchRule(R.parseRule("x = readme:hello"), scraped, []).unknown,
+      "but it CAN answer for its README, which the API never carries");
+
+    /* ---- A RULE WITH NOTHING LEFT TO TEST MATCHES NOTHING ------------------
+       `[].every()` is `true`, so a rule whose every term failed to parse was a
+       UNIVERSAL match — and because the first matching shelf wins, one typo
+       anywhere in the list became a black hole. Reproduced before the fix:
+       `Oops = topc:ai` drew one shelf holding all three repos and the
+       configured `misc` shelf vanished from the page entirely. It is the exact
+       inversion of the charter's failure shape. */
+    const hole = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["Oops = topc:ai", "misc"] },
+      apiRepos: [{ name: "one", topics: ["misc"] }, { name: "two", topics: [] }],
+      repos: [{ name: "one", topics: ["misc"] }, { name: "two", topics: [] }],
+    });
+    await settle(1400);
+    const hv = readShelves(hole.win);
+    const hb = byLabel(hv || { shelves: [] });
+    assert(ctx, !hb.Oops || hb.Oops.count === 0,
+      "an unreadable rule must hold nothing, got " + ((hb.Oops || {}).count));
+    assert(ctx, hb.misc && hb.misc.count === 1,
+      "and must not swallow the shelves after it, misc: " + ((hb.misc || {}).count));
+
+    /* ---- ONE SHELF PER LABEL ----------------------------------------------
+       A topic entry beside a rule of the same name built the same <details>
+       twice, and the second build re-parented the rows out of the first — a
+       phantom empty shelf with a non-zero count printed on it. */
+    const dup = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["ai", "ai = lang:python"] },
+      apiRepos: [{ name: "p", topics: [], language: "Python" },
+                 { name: "t", topics: ["ai"] }],
+      repos: [{ name: "p", topics: [] }, { name: "t", topics: ["ai"] }],
+    });
+    await settle(1400);
+    const dv = readShelves(dup.win);
+    const named = (dv || { shelves: [] }).shelves.filter((x) => x.label === "ai");
+    assert(ctx, named.length === 1,
+      "two entries with one name are one shelf, got " + named.length);
+    assert(ctx, named[0] && named[0].repos.length === Number(named[0].count),
+      "and its count is what it holds, got " + (named[0] || {}).count +
+      " printed over " + ((named[0] || {}).repos || []).length + " rows");
+
+    /* ---- AN EMPTY RULE SHELF WITH SOMETHING TO SAY IS STILL DRAWN ---------
+       On the very collection the rule was built for — scraped, so no language
+       and no dates — the shelf matched nothing, was dropped from the order,
+       and the page said nothing at all. */
+    const blind = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["Python = lang:python", "misc"] },
+      apiRepos: 401,
+      apiPublic: 401,
+      repos: [{ name: "a", topics: [] }, { name: "b", topics: ["misc"] }],
+    });
+    await settle(1600);
+    const blv = readShelves(blind.win);
+    const blb = byLabel(blv || { shelves: [] });
+    assert(ctx, blb.Python,
+      "a rule that could judge nobody is still drawn, shelves: " +
+      (blv || { shelves: [] }).shelves.map((x) => x.label).join(" | "));
+    const wt = blind.win.document.querySelector("#shelves-host .sh-weight");
+    assert(ctx, wt && /unjudged/.test(wt.textContent),
+      "carrying the count of repos it could not decide about, got: " +
+      ((wt || {}).textContent));
+
+    ctx.info = "5 repos, 1 satisfies the rule; unreadable terms named";
+  }),
+
+  check("weight - a shelf header says what the shelf is worth",
+    async (ctx) => {
+    /* A count is the least a shelf header could say, and the records to say
+       more are already here. One of the three sentences is one GitHub cannot
+       say at all: it knows when every repo was pushed and has no idea when you
+       last looked. */
+    const day = 86400000;
+    const now = Date.now();
+    const ago = (d) => new Date(now - d * day).toISOString();
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [
+        { name: "big", topics: ["keep"], stars: 100, updated: ago(2) },
+        { name: "old", topics: ["keep"], stars: 20, updated: ago(500) },
+        { name: "mid", topics: ["keep"], stars: 3, updated: ago(30) },
+      ],
+      repos: [
+        { name: "big", topics: ["keep"] }, { name: "old", topics: ["keep"] },
+        { name: "mid", topics: ["keep"] },
+      ],
+    });
+    /* Seeded before the first paint: main.js reads it once per visit. */
+    w.win.localStorage.setItem("shelves:seen:octo", String(now - 7 * day));
+    await settle(1600);
+    const el = w.win.document.querySelector("#shelves-host .sh-weight");
+    assert(ctx, el, "the shelf header must carry its weight");
+    if (!el) return;
+    const t = el.textContent;
+    assert(ctx, /123/.test(t), "stars are totalled, got: " + t);
+    assert(ctx, /1 stale/.test(t),
+      "stale is nothing pushed in a year, got: " + t);
+    assert(ctx, /1 since you were here/.test(t),
+      "and the one GitHub cannot say, got: " + t);
+
+    /* IT SAYS NOTHING RATHER THAN ZERO. A page the chips answered carries no
+       stars and no dates, and `* 0 - 0 stale` would be a statement about the
+       collection when it is a statement about the source. */
+    const chips = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [{ name: "a", chips: ["keep"] }, { name: "b", chips: ["keep"] }],
+    });
+    await settle(1400);
+    const cv = readShelves(chips.win);
+    assert(ctx, cv && /via page$/.test(cv.note.split(" · ").slice(-1)[0] ? cv.note : ""),
+      "the cheap rung answered, got: " + (cv || {}).note);
+    assert(ctx, !chips.win.document.querySelector("#shelves-host .sh-weight"),
+      "a source that carries no stars and no dates must say nothing at all");
+
+    /* AND THE LAST-VISIT STAMP IS TAKEN ONCE. Read per render, the answer is
+       "since a few hundred milliseconds ago", i.e. always zero. */
+    assert(ctx, Number(w.win.localStorage.getItem("shelves:seen:octo")) >= now,
+      "the visit is stamped for next time");
+    ctx.info = "123 stars, 1 stale, 1 since you were here; silent on rung 1";
+  }),
+
+  check("sibling-shelves - the row says which shelves it also matched",
+    async (ctx) => {
+    /* First match wins the row and it has to: a repo on two shelves is two
+       counts that do not add up. But the information that rule throws away is
+       real, and it is most of what a reader wants when a shelf looks thin. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["tooling", "Java = lang:java", "ai"] },
+      apiRepos: [
+        { name: "both", topics: ["tooling", "ai"], language: "Java" },
+        { name: "only-ai", topics: ["ai"], language: "Go" },
+      ],
+      repos: [
+        { name: "both", topics: ["tooling", "ai"] },
+        { name: "only-ai", topics: ["ai"] },
+      ],
+    });
+    await settle(1600);
+    const doc = w.win.document;
+    const li = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .find((x) => x.dataset.shName === "octo/both");
+    assert(ctx, li, "the row must be on the page");
+    if (!li) return;
+    assert(ctx, li.closest("details").querySelector(".sh-name").textContent === "tooling",
+      "first match still wins the row");
+
+    const chips = [...li.querySelectorAll(".sh-sib")].map((x) => x.textContent);
+    assert(ctx, chips.indexOf("Java") !== -1 && chips.indexOf("ai") !== -1,
+      "and the shelves it also matched are given back, got: " + chips.join(" | "));
+    assert(ctx, chips.indexOf("tooling") === -1,
+      "never the shelf it is actually on - that is the shelf it is in");
+
+    const solo = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .find((x) => x.dataset.shName === "octo/only-ai");
+    assert(ctx, solo && !solo.querySelector(".sh-sib"),
+      "a row that matched one shelf wears nothing");
+
+    /* THEY RIDE IN THE NOTE MARGIN, which on a row with no note is parked in
+       the padding GitHub already leaves — so they cost the row no height. The
+       pixels are only ever true in a browser; what is asserted here is that
+       they are in that element and not in one of their own. */
+    assert(ctx, li.querySelector(".sh-margin .sh-sibs"),
+      "and they live in the margin, not in a line of their own");
+    ctx.info = "on tooling, also Java and ai, no line of its own";
+  }),
+
+  check("pin-top - a few repos belong at the top of their shelf",
+    async (ctx) => {
+    /* A shelf of thirty is a scroll like any other. Ordering is the cheapest
+       possible edit: the rows are already there, nothing is fetched, nothing
+       is hidden. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      pins: { "octo/c": true },
+      repos: [
+        { name: "a", topics: ["keep"], private: true },
+        { name: "b", topics: ["keep"], private: true },
+        { name: "c", topics: ["keep"], private: true },
+      ],
+    });
+    await settle(1600);
+    const doc = w.win.document;
+    const order = () => [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .map((x) => x.dataset.shName.split("/")[1]);
+    assert(ctx, order().join() === "c,a,b",
+      "a pinned repo opens at the top of its shelf, got: " + order().join());
+
+    /* AND NOTHING ELSE MOVES. GitHub's order inside a shelf is the reader's
+       own `Sort` setting; the only claim being made is "these few first". */
+    const li = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .find((x) => x.dataset.shName === "octo/b");
+    if (!li) return;
+    li.querySelector(".sh-grip").click();
+    const pick = li.querySelector(".sh-pinpick");
+    assert(ctx, pick && /pin to top/.test(pick.textContent),
+      "the grip offers it, got: " + ((pick || {}).textContent));
+    if (!pick) return;
+    pick.click();
+    await settle(400);
+    assert(ctx, order().join() === "c,b,a",
+      "pinning puts it BELOW the ones already pinned, so pinning three in a " +
+      "row does not reverse them, got: " + order().join());
+    /* THE VALUE IS *WHEN*, not `true`. The page shows pinned rows in the order
+       they were pinned — the order the reader watched them rise in — and
+       without a stamp the next load re-derived that block in GitHub's own
+       source order, so the page quietly rearranged itself between the session
+       and the reload. The fixture seeds a legacy `true` above, which must
+       still work and must sort first. */
+    const stamp = (await w.win.Shelves.pins.read())["octo/b"];
+    assert(ctx, typeof stamp === "number" && stamp > 0,
+      "and it is written down, with when: " + JSON.stringify(stamp));
+
+    /* AND THE ORDER SURVIVES A RELOAD. Pinning out of source order is the case
+       that broke: pin `c` then `a` and the session showed `c,a` while the next
+       load showed `a,c`. What `bucket()` derives must equal what the page did. */
+    const derived = w.win.Shelves.bucket(
+      [...doc.querySelectorAll("#shelves-host li[data-sh-name]")],
+      [["keep"], ["keep"], ["keep"]],
+      { groups: ["keep"], otherLabel: "Ungrouped" },
+      [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+        .map((x) => x.dataset.shName),
+      {}, [],
+      { pins: await w.win.Shelves.pins.read() }
+    );
+    assert(ctx,
+      (derived.buckets.get("keep") || []).map((x) => x.dataset.shName.split("/")[1])
+        .join() === order().join(),
+      "the next load must draw the order this one showed: page " +
+      order().join() + " vs derived " +
+      (derived.buckets.get("keep") || []).map((x) => x.dataset.shName.split("/")[1]).join());
+
+    /* Unpinning drops it back under the pinned ones, not to the very bottom. */
+    li.querySelector(".sh-grip").click();
+    const off = li.querySelector(".sh-pinpick");
+    assert(ctx, off && /unpin/.test(off.textContent),
+      "the same control takes it back, got: " + ((off || {}).textContent));
+    if (off) off.click();
+    await settle(400);
+    assert(ctx, order().join() === "c,b,a" || order().join() === "c,a,b",
+      "unpinned it sits below the pinned ones, got: " + order().join());
+    assert(ctx, (await w.win.Shelves.pins.read())["octo/b"] === undefined,
+      "and the key goes with it");
+    /* ---- AND A PIN MUST NOT RELOAD THE PAGE -------------------------------
+       main.js reloads on any storage key it did not expect, and `pins` was not
+       on the exemption list — so in a real browser every pin press reloaded,
+       taking the reader's scroll, their filter and their open shelves with it,
+       which is the precise cost `overrides` was added to that list to avoid.
+
+       The harness could not see it: `onChanged` was a stub that never fired,
+       so a correct exemption list and a forgotten entry looked identical.
+       It fires now, and this is the assertion it was missing. */
+    const was = w.reloads.n;
+    await w.win.Shelves.pins.toggle("octo/a");
+    await settle(300);
+    assert(ctx, w.reloads.n === was,
+      "writing a pin must be quiet, got " + (w.reloads.n - was) + " reload(s)");
+
+    /* And the guard is real rather than vacuous — a key nobody exempted DOES
+       reload, which is what makes the silence above mean something. */
+    await new Promise((r) =>
+      w.win.chrome.storage.sync.set({ startCollapsed: true }, r));
+    await settle(400);
+    assert(ctx, w.reloads.n === was + 1,
+      "a setting the options page changed still reloads, got " +
+      (w.reloads.n - was));
+
+    ctx.info = "pinned rows first, in the order they were pinned";
   }),
 
   check("vocabulary - the tag system, read as a system", async (ctx) => {
@@ -1674,6 +2082,27 @@ const SCENARIOS = [
     assert(ctx, m.label === "keep",
       "an untagged repo the reader pinned wears the shelf they put it on, got: " +
       m.label);
+
+    /* A RULE SHELF THE CHIP COULD NOT POSSIBLY RE-DERIVE. At the ~160ms the
+       mark is drawn, GitHub has not rendered the languages bar or the
+       timestamps — they arrive with its own client-side pass — so `lang:java`
+       is unanswerable here and re-deriving fell to Ungrouped on a repo the
+       profile had on `Java`. The map is the answer; it is written on every
+       render for exactly this. */
+    const ruled = build({
+      viewer: "octo", at: "octo/app", owner: "octo",
+      settings: { groups: ["Java = lang:java"] },
+      shelfMap: { octo: { order: ["Java", "Ungrouped"], counts: { Java: 4 },
+                          on: { "octo/app": "Java" } } },
+      page: { name: "app", topics: [] },      // nothing on the page says Java
+      repos: [{ name: "app", topics: [] }],
+    });
+    await settle(900);
+    const rm = readMark(ruled.win);
+    assert(ctx, rm && rm.label === "Java",
+      "the chip reads the shelf the profile recorded, got: " + ((rm || {}).label));
+    assert(ctx, rm && !rm.plain,
+      "and wears that shelf's colour rather than the leftovers one");
     assert(ctx, !m.plain && m.hue,
       "and it is coloured like that shelf, not drawn as the leftovers one");
     ctx.info = "pinned to keep, chip reads keep " + (m.glyph || "");

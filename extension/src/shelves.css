@@ -908,3 +908,57 @@
 #shelves-host .sh-btn[data-on="1"] {
   border-color: var(--borderColor-accent-emphasis, #1f6feb);
 }
+
+/* ---- SHELVES WORTH THE NAME ---------------------------------------------
+   Three additions to a shelf header and a row, all of them information the
+   page already had and was throwing away. */
+
+/* What a shelf is worth, beside its count and quieter than it: the count is
+   the shelf's identity, this is its weather. */
+.sh-weight {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--fgColor-muted, #8b949e);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* `margin-left: auto` on both this and `.sh-count` would fight; the count
+   keeps its place at the end and the weight sits just before it. */
+.sh-weight + .sh-count { margin-left: 8px; }
+
+/* The shelves a row also matched. They live in the note margin, which on a
+   row with no note is parked in the padding GitHub already leaves — so this
+   costs the row no height at all. Drawn, never pressable: a chip you could
+   click would mean "move it there", and that is the grip's job. */
+.sh-sibs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+.sh-sib {
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 6px;
+  border-radius: 2em;
+  white-space: nowrap;
+  color: var(--fgColor-muted, #8b949e);
+  border: 1px solid var(--borderColor-default, #30363d);
+}
+.sh-sib-more { border-style: dashed; }
+
+/* A pinned row. The mark is on the left edge and nowhere else — a background
+   would fight the row's own hover, and a badge would need width the line does
+   not have. */
+#shelves-host li[data-sh-pin="1"] {
+  box-shadow: inset 3px 0 0 var(--fgColor-attention, #d29922);
+}
+.sh-pinpick { color: var(--fgColor-attention, #d29922) !important; }
+/* The pin verb acts on the shelf the row is already on, so it is separated
+   from the list of shelves to move to. */
+.sh-pinpick { border-bottom: 1px solid var(--borderColor-default, #30363d); }
