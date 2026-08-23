@@ -160,9 +160,44 @@ globalThis.Shelves = globalThis.Shelves || {};
    *          `health` is the canary's sentence, or "" when nothing is wrong
    *          and when too few pages were read to have an opinion.
    */
+  /* ── WHAT THIS VISIT HAS ALREADY READ ───────────────────────────────────
+   * GitHub's Type and Language menus do not navigate. They fetch, and then
+   * REPLACE the children of `#user-repositories-list` — measured: our host is
+   * removed, a new `<ul>` with new `<li>` elements arrives, every `data-sh-*`
+   * on every row is gone, and no `turbo:*` event fires at all, so the
+   * MutationObserver is the only thing that notices. We cannot keep the rows:
+   * they are genuinely different elements.
+   *
+   * What survives is the JAVASCRIPT CONTEXT — measured, a marker set on
+   * `window` before the filter was still there after it. So the one thing
+   * worth keeping is the answer: a repo whose facts this visit has already
+   * paid for must never be paid for twice because the reader touched a
+   * dropdown. Signed out that is one API call saved; on an account whose
+   * private repos reach rung 4 it is one authenticated page read per repo,
+   * every time a menu is touched.
+   *
+   * A Map and not a store: it dies with the page, so it can never serve
+   * yesterday's topics, and `rescan` — which reloads — is unaffected by it. */
+  S.session = new Map();
+
   S.resolve = async function resolve(rows, names, settings, onProgress) {
     let topics = rows.map((li) => S.topicsIn(li));
     let facts = names.map((n, i) => ({ name: n, topics: topics[i], via: "page-chips" }));
+
+    /* The memo outranks a chip for the same reason the API does: it carries
+     * ten fields where a chip carries one. It never overrides a repo the page
+     * itself answered with MORE topics — it cannot, they are the same repo. */
+    let remembered = 0;
+    names.forEach((n, i) => {
+      const seen = n && S.session.get(n);
+      if (!seen) return;
+      /* A chip the page is showing now beats a remembered empty: the reader
+       * may have tagged the repo in another tab since. */
+      if (!(topics[i] || []).length) topics[i] = seen.topics || [];
+      facts[i] = seen;
+      remembered++;
+    });
+
     const answered = () => topics.filter((t) => t.length).length;
 
     /* ── WHOSE PROFILE IS THIS ──────────────────────────────────────────────
@@ -206,8 +241,15 @@ globalThis.Shelves = globalThis.Shelves || {};
      * kept as a floor the rungs below only add to. */
     const fromChips = answered();
     const asked = names.filter(Boolean).length;
-    if (asked > 0 && fromChips >= asked) {
-      return { topics, facts, source: "page", warning: "", health: "" };
+    /* EVERY REPO ANSWERED means no rung below has anything to do — whether the
+     * page answered them or this visit already had. */
+    if (asked > 0 && (fromChips >= asked || remembered >= asked)) {
+      return {
+        topics, facts, warning: "", health: "", deferred: 0,
+        source: remembered >= asked && remembered
+          ? (fromChips > remembered ? "page + already read" : "already read")
+          : "page",
+      };
     }
 
     // Rungs 2 and 3 — the API, via the worker. One call answers everyone.
@@ -218,7 +260,8 @@ globalThis.Shelves = globalThis.Shelves || {};
      * hide the requests that actually answered most of the collection — which
      * is P.IV pointing the wrong way. The honest answer is a list. */
     const rungs = [];
-    if (fromChips) rungs.push("page");
+    if (fromChips > remembered) rungs.push("page");
+    if (remembered) rungs.push("already read");
 
     let reply = await askWorker({
       type: "repos",
@@ -309,6 +352,25 @@ globalThis.Shelves = globalThis.Shelves || {};
      * can lift is a choice offered, and view.js draws it as the button that
      * lifts it. Putting it in the amber sentence beside "token rejected" would
      * teach the reader to read a deliberate limit as a fault. */
+    /* Remembered for the rest of this visit, so a dropdown cannot make the page
+     * pay for the same repositories again.
+     *
+     * KEYED ON WHETHER A RUNG ANSWERED, NOT ON WHETHER IT FOUND ANYTHING.
+     * "this repo genuinely has no topics" is an answer and it is the commonest
+     * one — the same fact `ladder-floor` leans on when the API settles an
+     * untagged repo for free. Remembering only the tagged ones left every
+     * untagged repo forcing the whole ladder to climb again on the next
+     * dropdown, which on a 68-untagged account is the entire cost.
+     *
+     * `via: "page-chips"` is NOT an answer: it is the absence of a chip, which
+     * is exactly what rung 1 is forbidden to treat as one. And a repo rung 4
+     * could not read has no `via` at all, so it is retried rather than
+     * remembered as empty. */
+    names.forEach((n, i) => {
+      const f = facts[i];
+      if (n && f && f.via && f.via !== "page-chips") S.session.set(n, f);
+    });
+
     return { topics, facts, source: rungs.join(" + "), warning, health, deferred };
   };
 })(globalThis.Shelves);

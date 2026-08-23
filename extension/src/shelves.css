@@ -803,3 +803,108 @@
    hit-testing was concerned. Lifted only while a menu is actually open, and
    only on the shelf holding it. */
 #shelves-host details.sh-shelf[data-menu="1"] { overflow: visible; }
+
+/* ---- COMPACT: one line per repository -----------------------------------
+   GitHub draws a row 109px tall — 24px of padding either side of a block
+   column holding a heading, a description it may not have, a topic row it may
+   not have, and a footer line. On 77 repos that is eight screens to read a
+   list, and no amount of shelving helps because the shelves are not what is
+   tall.
+
+   EVERY RULE HERE IS CSS AND NOTHING IS REMOVED FROM THE ROW (P.V). The
+   description and the topic chips are still in the DOM, still in the search
+   index, still there the moment the reader presses `roomy` — this is a
+   posture, not a second rendering path. */
+
+/* The row's own padding is GitHub's `tmp-py-4`; `!important` because that
+   utility class is what sets it. */
+#shelves-host[data-density="compact"] li[data-sh-name] {
+  padding-top: 5px !important;
+  padding-bottom: 5px !important;
+}
+
+/* The text column becomes the line. `min-width: 0` on a flex child is what
+   lets the name ellipsis instead of pushing the meta off the row. */
+/* `display` needs `!important` here and nowhere else in this file: the column
+   wears Primer's `.d-inline-block`, which is itself `!important`, so
+   specificity alone loses however long the selector is. Measured — without it
+   the row came out 81px instead of 32px and the rule looked like it had simply
+   not worked. */
+#shelves-host[data-density="compact"] li[data-sh-name] > div:first-child {
+  display: flex !important;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: 10px;
+  min-width: 0;
+}
+#shelves-host[data-density="compact"] li[data-sh-name] > div:first-child > div {
+  margin-bottom: 0 !important;
+  min-width: 0;
+}
+#shelves-host[data-density="compact"] li[data-sh-name] h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The three things that make the row tall, and the one that makes it tall
+   without saying anything: the commit graph is 30px of decoration. */
+#shelves-host[data-density="compact"] li[data-sh-name] p,
+#shelves-host[data-density="compact"] li[data-sh-name] .topics-row-container,
+#shelves-host[data-density="compact"] li[data-sh-name] poll-include-fragment,
+#shelves-host[data-density="compact"] li[data-sh-name] include-fragment {
+  display: none !important;
+}
+/* The commit graph is 30px of decoration and it sets the row's floor once the
+   text column is one line. It is matched STRUCTURALLY — the fragment replaces
+   itself with an <svg> once it loads, so hiding the fragment alone leaves the
+   graph behind, and the wrapper's class list (`text-right hide-lg hide-md
+   hide-sm hide-xs flex-self-end`) is the churning half of GitHub's markup.
+   An octicon carries `.octicon`; the sparkline is the svg that does not. */
+#shelves-host[data-density="compact"] li[data-sh-name] > div:last-child
+  div:has(> svg:not(.octicon)) {
+  display: none !important;
+}
+
+/* The footer line joins the heading instead of sitting under it, and stops
+   wrapping — "Java · Updated on Jan 30, 2025" on two lines is the row being
+   tall again by another route. */
+#shelves-host[data-density="compact"] li[data-sh-name] .f6.color-fg-muted {
+  margin-top: 0 !important;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* THE PARKED MARKER HAS NOWHERE TO PARK. `.sh-margin[data-has="0"]` is
+   absolutely positioned into the row's 24px of bottom padding — with 5px of
+   padding it would hang over the row below. On one line it becomes an
+   ordinary flex item at the end instead, which is where a grip and a pencil
+   belong when the row IS a line. */
+#shelves-host[data-density="compact"] .sh-col > .sh-margin[data-has="0"] {
+  position: static;
+  width: auto;
+  margin: 0;
+  flex: none;
+}
+/* A written note keeps its place on the line and gives up the width instead
+   of the row giving up its height. */
+#shelves-host[data-density="compact"] .sh-margin[data-has="1"] {
+  min-width: 0;
+  margin: 0;
+}
+#shelves-host[data-density="compact"] .sh-note-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The star column stays — it is GitHub's control and hiding it would be
+   removing function rather than spacing — but it stops setting the row's
+   height. */
+#shelves-host[data-density="compact"] li[data-sh-name] > div:last-child {
+  align-self: center;
+}
+
+#shelves-host .sh-btn[data-on="1"] {
+  border-color: var(--borderColor-accent-emphasis, #1f6feb);
+}

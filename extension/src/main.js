@@ -56,6 +56,76 @@ globalThis.Shelves = globalThis.Shelves || {};
       }
 
       const names = rows.map(S.fullNameOf);
+
+      /* ══ PHASE ONE — the page, from what is already free ══════════════════
+       * A cold run is one authenticated fetch per repo at concurrency six, and
+       * until it finishes the reader is looking at the flat list they came to
+       * get away from. Two sources cost nothing and are sitting right here:
+       * the topic chips GitHub renders on the rows, and every record rung 4
+       * has already paid for on a previous visit.
+       *
+       * IT HELPS EXACTLY WHERE THE PAIN IS. The fact cache only ever holds
+       * rung-4 records — `factsFromApi` results are never written to it — so
+       * it is populated precisely for the private, API-invisible tail that
+       * makes a run slow. An account the API can see is already fast and has
+       * nothing cached; it simply skips this and loses nothing.
+       *
+       * NO FRESHNESS GATE. `scrape()` checks `cacheDays` because it is
+       * deciding whether to spend a request; this spends nothing and is
+       * provisional by construction. A nine-day-old topic list is a better
+       * first frame than `Ungrouped`, and phase two overwrites it either way.
+       * `Array.isArray` stays — it defends against a half-migrated store. */
+      /* ══ WHAT THE HANDLERS READ ═══════════════════════════════════════════
+       * The row-level listeners are attached ONCE, on the first pass, and they
+       * outlive it — so anything they close over has to be a binding that
+       * phase two updates, never a value phase one captured.
+       *
+       * It is not only staleness. `const { topics, facts } = await resolve(…)`
+       * leaves both names in their dead zone for the whole of rung 4, which is
+       * exactly the window in which the reader has a usable page to click on:
+       * a drag or a note saved during it would have thrown a ReferenceError
+       * rather than being merely wrong. */
+      let curTopics = [];
+      let curFacts = [];
+      let host = null;
+      let notes = await S.notes.read();
+      let overrides = await S.overrides.read();
+      const mine = S.isMine();
+
+      try {
+        const warm = await S.cache.read();
+        const chips = rows.map((li) => S.topicsIn(li));
+        const early = names.map((n, i) => {
+          const hit = warm[n];
+          return hit && Array.isArray(hit.topics)
+            ? hit
+            : { name: n, topics: chips[i] || [], via: "page-chips" };
+        });
+        curTopics = early.map((f) => f.topics);
+        curFacts = early;
+        if (early.some((f) => f.topics.length)) {
+          host = S.render({
+            rows, names, settings, sourceUl, owner, notes, overrides, mine,
+            topics: curTopics,
+            facts: curFacts,
+            /* P.IV, and it is not a formality: this line must never name a
+             * rung that has not run. `cache` and `page` are both true here,
+             * and the moment the ladder answers it says so instead. */
+            source: "page + cache",
+            warning: "", health: "", deferred: 0,
+            provisional: true,
+            handlers: shelfHandlers(),
+          });
+          host.dataset.provisional = "1";
+          sourceUl.replaceWith(host);
+          swapped = true;
+        }
+      } catch (e) {
+        /* The first frame is an optimisation. If anything about it is wrong
+         * the reader must still get the page the slow way (P.III). */
+        console.warn("[shelves] no early frame", e);
+      }
+
       status.textContent = settings.token
         ? "reading topics from the API…"
         : "reading topics…";
@@ -73,8 +143,12 @@ globalThis.Shelves = globalThis.Shelves || {};
         }
       );
 
-      const notes = await S.notes.read();
-      const overrides = await S.overrides.read();
+      /* RE-READ, NOT REUSED. The reader has had the page for the whole of
+       * rung 4 and may well have written a note or pinned a repo in it —
+       * `margin()`'s repaint would otherwise wipe the note back to the empty
+       * string it had when the first frame was drawn. */
+      notes = await S.notes.read();
+      overrides = await S.overrides.read();
 
       /* ── THE FIRST-DAY VERBS ARE FOR YOUR OWN PROFILE ────────────────────
        * P.XIV narrowed the expensive RUNGS to the reader's own repositories;
@@ -95,12 +169,27 @@ globalThis.Shelves = globalThis.Shelves || {};
        * still shelved, still searchable, still audited. Only the verbs that
        * write the reader's own setup stand down, and they stand down by not
        * being handed to render() at all, so there is no affordance to press. */
-      const mine = S.isMine();
+      curTopics = topics;
+      curFacts = facts;
 
-      const host = S.render({
-        rows, topics, facts, names, notes, settings, sourceUl, source, warning,
-        health, owner, deferred, overrides, mine,
-        handlers: {
+      if (host) {
+        /* ══ PHASE TWO — re-bucket, never re-render ═════════════════════════
+         * The host is not replaced. See `host.rebucket` in view.js for what
+         * that buys and what swapping would have cost. */
+        host.rebucket({ topics, facts, notes, overrides, source, warning,
+                        health, deferred });
+      } else {
+        host = S.render({
+          rows, topics, facts, names, notes, settings, sourceUl, source, warning,
+          health, owner, deferred, overrides, mine,
+          handlers: shelfHandlers(),
+        });
+        sourceUl.replaceWith(host);
+        swapped = true;
+      }
+
+      function shelfHandlers() {
+        return {
           reload: () => location.reload(),
           /* THE ONLY VERB HERE THAT DELIBERATELY SPENDS REQUESTS. It reloads
            * rather than re-entering run(), for the same reason rescan does:
@@ -151,7 +240,7 @@ globalThis.Shelves = globalThis.Shelves || {};
              * key goes; if it would land somewhere else, the reader has said
              * something and it is stored — including the leftovers label. */
             const i = names.indexOf(name);
-            const natural = S.bucketFor(i >= 0 ? topics[i] || [] : [], settings);
+            const natural = S.bucketFor(i >= 0 ? curTopics[i] || [] : [], settings);
             const { ok } = await S.overrides.set(name, natural === label ? "" : label);
             if (!ok) return;
             /* The write is the truth; this is the page catching up. If the
@@ -229,14 +318,12 @@ globalThis.Shelves = globalThis.Shelves || {};
             const wrap = li.querySelector(".sh-margin");
             if (wrap) S.paintNote(wrap, after[name] || "");
             li.dataset.shHay = S.haystack(
-              li.dataset.shText || "", facts[i], after[name] || ""
+              li.dataset.shText || "", curFacts[i], after[name] || ""
             );
           },
-        },
-      });
+        };
+      }
 
-      sourceUl.replaceWith(host);
-      swapped = true;
     } catch (e) {
       /* P.III — the page must never be left worse than we found it. If we
        * threw before the swap, the original list is still in the document;

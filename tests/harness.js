@@ -992,6 +992,375 @@ const SCENARIOS = [
     ctx.info = "shelved and searchable; 0 suggestions, 0 walks, 0 grips, 0 writes";
   }),
 
+  check("progressive - the page arrives from the cache, then corrects itself",
+    async (ctx) => {
+    /* A COLD RUN IS ONE AUTHENTICATED FETCH PER REPO, and until it finishes
+       the reader is looking at the flat list they came to get away from. Two
+       sources cost nothing and are already here: the chips GitHub renders on
+       the rows, and every record rung 4 has paid for on a previous visit.
+
+       Rung 4 is made slow on purpose below — in jsdom both passes would
+       otherwise land inside one `settle()` and the window this feature exists
+       for would be untestable. */
+    const at = Date.now();
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep", "later"] },
+      apiRepos: [],
+      cache: {
+        "octo/known-a": { at, topics: ["keep"], name: "octo/known-a", via: "page" },
+        "octo/known-b": { at, topics: ["keep"], name: "octo/known-b", via: "page" },
+      },
+      repos: [
+        { name: "known-a", topics: ["keep"], private: true },
+        { name: "known-b", topics: ["keep"], private: true },
+        { name: "slow-c", topics: ["later"], private: true },
+        { name: "slow-d", topics: [], private: true },
+      ],
+    });
+    const real = w.win.fetch;
+    w.win.fetch = (u) => new Promise((r) => setTimeout(() => r(real(u)), 700));
+
+    /* ---- the first frame -------------------------------------------------- */
+    await settle(450);
+    const host1 = w.win.document.getElementById("shelves-host");
+    assert(ctx, host1, "the page must be shelved before the ladder answers");
+    if (!host1) return;
+    assert(ctx, host1.dataset.provisional === "1",
+      "and it must know it is a guess");
+
+    let v = readShelves(w.win);
+    let b = byLabel(v);
+    assert(ctx, b.keep && b.keep.count === 2,
+      "the two cached repos are shelved from the cache, got: " +
+      ((b.keep || {}).count));
+    /* P.IV — the line must never name a rung that has not run. */
+    assert(ctx, /via page \+ cache/.test(v.note),
+      "and it says what answered, got: " + v.note);
+    assert(ctx, !/repo pages/.test(v.note),
+      "and does NOT name the rung still running, got: " + v.note);
+
+    /* A PROVISIONAL SHELF MUST LEAVE NOTHING BEHIND. `shelves:open:<owner>`
+       has no eviction path, and a `toggle` fires as a queued task, so shelves
+       opened by a guess would otherwise persist open-state for names the
+       finished page may never draw again. */
+    assert(ctx, !w.win.localStorage.getItem("shelves:open:octo"),
+      "the first frame must not write the collapse store, got: " +
+      w.win.localStorage.getItem("shelves:open:octo"));
+    assert(ctx, !Object.keys(w.store.local.shelfMap || {}).length,
+      "nor publish a shelf map another page would colour a chip from");
+
+    /* THE READER CAN USE IT, and what they do must survive the correction. */
+    type(w.win, "known");
+    assert(ctx, /2 of 4/.test(readShelves(w.win).found),
+      "the filter works on the first frame, got: " + readShelves(w.win).found);
+
+    /* ---- the correction --------------------------------------------------- */
+    await settle(2600);
+    const host2 = w.win.document.getElementById("shelves-host");
+    assert(ctx, host2 === host1,
+      "THE HOST IS NOT REPLACED — swapping it would take the find box's text, " +
+      "the open audit panel, keyboard focus and an open menu with it, while " +
+      "the rows kept their sh-hide classes with nothing on screen saying why");
+    assert(ctx, host2.dataset.provisional === undefined,
+      "and it stops calling itself a guess");
+
+    v = readShelves(w.win);
+    assert(ctx, /repo pages/.test(v.note),
+      "the line now names the rung that answered, got: " + v.note);
+
+    /* THE FILTER SURVIVED — asserted BEFORE the counts, because a live filter
+       is exactly why the counts read "1 / 1" rather than "1". The `sh-hide`
+       classes ride on the rows, so a pass that forgot to re-apply the filter
+       would leave a full set of counts, an empty search box, and two
+       repositories simply missing with nothing on screen saying why. */
+    assert(ctx, v.find.value === "known", "what the reader typed is still there");
+    assert(ctx, /2 of 4/.test(v.found),
+      "and it still means what it said, got: " + v.found);
+    assert(ctx, v.visible.sort().join() === "known-a,known-b",
+      "and it is still hiding the right rows, got: " + v.visible.join());
+
+    type(w.win, "");
+    v = readShelves(w.win);
+    b = byLabel(v);
+    assert(ctx, v.visible.length === 4, "clearing it restores every row");
+    assert(ctx, b.later && b.later.count === 1,
+      "a shelf the cache never knew about is created, got: " +
+      ((b.later || {}).count));
+    assert(ctx, b.keep && b.keep.count === 2, "and the cached ones are still right");
+    assert(ctx, b.Ungrouped && b.Ungrouped.count === 1,
+      "and the genuinely untagged one is left over");
+
+    assert(ctx, w.win.document.querySelectorAll("#shelves-host").length === 1,
+      "one host, always");
+    assert(ctx, w.win.document.querySelectorAll("#shelves-host li .sh-margin").length === 4,
+      "and one margin per row - a second pass must not double the furniture");
+    ctx.info = "shelved from cache at first frame, re-bucketed in place, filter kept";
+  }),
+
+  check("compose - GitHub's own filters cost nothing and keep what you typed",
+    async (ctx) => {
+    /* MEASURED, on the real page: GitHub's Type and Language menus do not
+       navigate. They fetch, then REPLACE the children of
+       `#user-repositories-list` — our host is removed, a new <ul> with new
+       <li> elements arrives, every `data-sh-*` is gone, and NO `turbo:*` event
+       fires, so the MutationObserver is the only thing that notices. The rows
+       cannot be kept; they are different elements.
+
+       What survives is the JavaScript context. So two things must survive with
+       it: the answer this visit already paid for, and the query the reader
+       typed. Both were lost before — `"wire"`, 3 of 54, gone half a second
+       after touching a dropdown, and every repo resolved again from scratch. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      repos: [
+        { name: "wire-a", topics: ["keep"], private: true },
+        { name: "wire-b", topics: ["keep"], private: true },
+        { name: "other", topics: [], private: true },
+      ],
+    });
+    await settle(1400);
+    let v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+    const firstReads = w.counters.scraped.length;
+    const firstApi = w.counters.api;
+    assert(ctx, firstReads === 3,
+      "the first pass reads what the API cannot see, got " + firstReads);
+
+    // the reader filters
+    type(w.win, "wire");
+    assert(ctx, /2 of 3/.test(readShelves(w.win).found),
+      "filtered, got: " + readShelves(w.win).found);
+
+    /* Now GitHub's dropdown, reproduced exactly as measured: the host and the
+       list are removed together and a brand-new <ul> of brand-new rows is put
+       in their place. No turbo event — the observer is on its own. */
+    const holder = w.win.document.getElementById("user-repositories-list");
+    assert(ctx, holder, "the fixture must have the list container");
+    if (!holder) return;
+    const fresh = w.win.document.createElement("ul");
+    [...w.win.document.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .forEach((li) => {
+        const copy = li.cloneNode(true);
+        /* GitHub's rows arrive with none of our marks on them. */
+        ["shName", "shHay", "shText", "shMargin", "shLoose"].forEach((k) => {
+          delete copy.dataset[k];
+        });
+        copy.querySelectorAll(".sh-margin").forEach((m) => m.remove());
+        fresh.appendChild(copy);
+      });
+    holder.innerHTML = "";
+    holder.appendChild(fresh);
+    await settle(1600);
+
+    v = readShelves(w.win);
+    assert(ctx, v, "the observer must shelve the replacement list");
+    if (!v) return;
+
+    /* 1. IT COSTS NOTHING. Every repo was answered earlier in this visit, so
+       no rung below the memo has anything to do. */
+    assert(ctx, w.counters.scraped.length === firstReads,
+      "a dropdown must not re-read repositories this visit already read: " +
+      (w.counters.scraped.length - firstReads) + " extra page reads");
+    /* THE API RUNG IS THE ONE THE DISK CACHE CANNOT SAVE. `repoFacts` only
+       ever answers rung 4, so `askWorker` fires on EVERY run — measured on the
+       real page, one api.github.com call per dropdown, warm or cold. The memo
+       is what makes the whole ladder stand down when this visit has already
+       answered every repo on the list. */
+    assert(ctx, w.counters.api === firstApi,
+      "nor spend an API call on an answer it already has, spent " +
+      (w.counters.api - firstApi) + " more");
+    assert(ctx, /already read/.test(v.note),
+      "and the source line says where the answer came from, got: " + v.note);
+
+    /* 2. AND IT KEEPS WHAT THE READER TYPED. */
+    assert(ctx, v.find.value === "wire",
+      "the query survives GitHub's swap, got: " + JSON.stringify(v.find.value));
+    assert(ctx, /2 of 3/.test(v.found),
+      "and it is applied, not merely displayed, got: " + v.found);
+    assert(ctx, v.visible.sort().join() === "wire-a,wire-b",
+      "so the right rows are showing, got: " + v.visible.join());
+
+    /* CLEARING IT MUST ALSO STICK. A remembered filter that cannot be
+       forgotten would follow the reader through every dropdown for the rest of
+       the visit. And the counts only read as plain numbers once nothing is
+       filtered — "2 / 2" is the filtered form, not a broken one. */
+    type(w.win, "");
+    assert(ctx, w.win.Shelves.lastFilter === null,
+      "an empty box is not a filter to remember");
+
+    const b = byLabel(readShelves(w.win));
+    assert(ctx, b.keep && b.keep.count === 2,
+      "and the shelves are rebuilt correctly, keep: " + ((b.keep || {}).count));
+    ctx.info = "0 extra reads across the swap; the query and its rows kept";
+  }),
+
+  check("density - compact is a posture, not a second rendering path",
+    async (ctx) => {
+    /* GitHub draws a repository row 109px tall: 24px of padding either side of
+       a block column holding a heading, a description it may not have, a topic
+       row it may not have, and a footer line. On 77 repos that is eight
+       screens to read a list, and the shelves cannot help because the shelves
+       are not what is tall. Measured in a real browser: 109px -> 41px, nine
+       rows a screen -> twenty-four.
+
+       THE HEIGHTS ARE NOT ASSERTED HERE. jsdom computes no layout, so a
+       stylesheet claim is worth nothing to it; `tests/density.py` measures the
+       pixels against a real profile. What IS asserted is everything the
+       stylesheet hangs off: the attribute, the toggle, the memory, and the
+       fact that nothing is removed from the row. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] }, apiRepos: [],
+      repos: [
+        { name: "a", topics: ["keep"], private: true, description: "the first one" },
+        { name: "b", topics: [], private: true, description: "the second one" },
+      ],
+    });
+    await settle(1400);
+    const doc = w.win.document;
+    const host = doc.getElementById("shelves-host");
+    assert(ctx, host, "never rendered");
+    if (!host) return;
+
+    assert(ctx, host.dataset.density === "roomy",
+      "GitHub's own spacing is the default, got: " + host.dataset.density);
+    const btn = [...doc.querySelectorAll("#shelves-host .sh-btn")]
+      .find((b) => b.textContent === "compact");
+    assert(ctx, btn, "the toolbar must offer it");
+    if (!btn) return;
+
+    btn.click();
+    assert(ctx, host.dataset.density === "compact",
+      "one attribute on the host is the whole switch, got: " + host.dataset.density);
+    assert(ctx, btn.textContent === "roomy",
+      "and the button then offers the way back, got: " + btn.textContent);
+
+    /* NOTHING IS REMOVED FROM THE ROW. Compact is CSS: the description is
+       still in the DOM, still in the search index, and still there the moment
+       the reader presses `roomy`. A second rendering path that stripped the
+       row would take the filter's reach with it. */
+    const rows = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")];
+    assert(ctx, rows.length === 2, "both rows are still drawn, got " + rows.length);
+    assert(ctx, rows.every((li) => li.querySelector("p")),
+      "the description is hidden by CSS, never deleted");
+    assert(ctx, (rows[0].dataset.shHay || "").indexOf("first") !== -1,
+      "so the filter still reaches it");
+
+    assert(ctx, w.win.Shelves.density.read("octo") === "compact",
+      "and the choice is remembered for this profile");
+    btn.click();
+    assert(ctx, host.dataset.density === "roomy" &&
+                w.win.Shelves.density.read("octo") === "roomy",
+      "toggling back is remembered too");
+
+    /* REMEMBERED MEANS READ BEFORE THE FIRST PAINT. Applying it afterwards
+       would draw the roomy page and then collapse it under the reader. */
+    const w2 = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] }, apiRepos: [],
+      repos: [{ name: "a", topics: ["keep"], private: true }],
+    });
+    w2.win.localStorage.setItem("shelves:density:octo", "compact");
+    await settle(1400);
+    const host2 = w2.win.document.getElementById("shelves-host");
+    assert(ctx, host2 && host2.dataset.density === "compact",
+      "a remembered compact profile opens compact, got: " +
+      ((host2 || {}).dataset || {}).density);
+    ctx.info = "one attribute, remembered per profile; the row keeps every field";
+  }),
+
+  check("keyboard - the shelves are the navigation, so they answer to keys",
+    async (ctx) => {
+    /* GitHub's readers live on the keyboard, and the shelves have replaced the
+       list `/` used to be about. Every key here stands down inside a field —
+       including GitHub's own boxes and our note editor — so the only keys they
+       ever take are ones pressed while reading. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["one", "two", "three"], startCollapsed: true },
+      apiRepos: [],
+      repos: [
+        { name: "a", topics: ["one"], private: true },
+        { name: "b", topics: ["two"], private: true },
+        { name: "c", topics: ["three"], private: true },
+        { name: "d", topics: [], private: true },
+      ],
+    });
+    await settle(1400);
+    const doc = w.win.document;
+    const host = doc.getElementById("shelves-host");
+    assert(ctx, host, "never rendered");
+    if (!host) return;
+
+    const press = (key, target) => {
+      const ev = new w.win.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      (target || doc.body).dispatchEvent(ev);
+      return ev;
+    };
+    const shelves = () => [...host.querySelectorAll("details.sh-shelf")];
+    const focusedShelf = () => {
+      const a = doc.activeElement;
+      const d = a && a.closest ? a.closest("details.sh-shelf") : null;
+      return d ? d.querySelector(".sh-name").textContent : null;
+    };
+
+    // `/` — the filter, focused and selected
+    press("/");
+    assert(ctx, doc.activeElement === host.querySelector(".sh-find"),
+      "`/` focuses the filter");
+
+    // j / k walk the shelves, and they move FOCUS, not just the scroll —
+    // focus is what a screen reader follows and what Enter then acts on.
+    doc.activeElement.blur();
+    press("j");
+    assert(ctx, focusedShelf() === "one", "`j` lands on the first shelf, got: " + focusedShelf());
+    press("j");
+    assert(ctx, focusedShelf() === "two", "`j` again moves on, got: " + focusedShelf());
+    press("k");
+    assert(ctx, focusedShelf() === "one", "`k` goes back, got: " + focusedShelf());
+
+    /* IT WRAPS RATHER THAN STOPPING DEAD. A cursor that sticks at the end
+       gives no feedback distinguishable from a key that did nothing. */
+    press("k");
+    assert(ctx, focusedShelf() === shelves()[shelves().length - 1]
+      .querySelector(".sh-name").textContent,
+      "`k` from the first shelf wraps to the last, got: " + focusedShelf());
+
+    // digits jump AND open — a shelf you jumped to and cannot see is not a jump
+    press("2");
+    assert(ctx, focusedShelf() === "two", "`2` jumps to the second shelf");
+    assert(ctx, shelves()[1].open === true, "and opens it");
+
+    // e / c are expand-all and collapse-all
+    press("e");
+    assert(ctx, shelves().every((d) => d.open), "`e` expands every shelf");
+    press("c");
+    assert(ctx, shelves().every((d) => !d.open), "`c` collapses every shelf");
+
+    /* A DIGIT NAMING NO SHELF IS NOT OURS TO TAKE. With four shelves, `9` must
+       reach the page untouched — GitHub may want it. */
+    const nine = press("9");
+    assert(ctx, !nine.defaultPrevented,
+      "a digit naming no shelf must not be swallowed");
+
+    /* AND NOTHING FIRES INSIDE A FIELD. Typing `j` into the filter must type a
+       `j`, and a modifier belongs to the browser: ctrl+J is the download
+       shelf, and a shortcut that eats it is a bug in somebody else's app. */
+    const find = host.querySelector(".sh-find");
+    const inField = press("j", find);
+    assert(ctx, !inField.defaultPrevented, "`j` inside the filter box is a letter");
+    const ctrl = new w.win.KeyboardEvent("keydown",
+      { key: "j", ctrlKey: true, bubbles: true, cancelable: true });
+    doc.body.dispatchEvent(ctrl);
+    assert(ctx, !ctrl.defaultPrevented, "and a modified key is the browser's");
+
+    ctx.info = "/ j k 1-9 e c — focus moves, digits open, fields and modifiers untouched";
+  }),
+
   check("vocabulary - the tag system, read as a system", async (ctx) => {
     /* Every finding the panel can make, in one small collection:
          project      on 5 of 6 tagged repos      -> a blanket label

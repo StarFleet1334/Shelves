@@ -617,6 +617,14 @@ globalThis.Shelves = globalThis.Shelves || {};
           : shown + " of " + total;
     }
     host.dataset.filtering = active ? "1" : "";
+    /* ── KEPT ACROSS GITHUB'S OWN FILTERS ──────────────────────────────────
+     * Type and Language do not navigate; they swap the rows out from under us
+     * and our host with them, and the reader's query goes with it — measured:
+     * `"wire"`, 3 of 54, 51 rows hidden, all of it gone half a second later.
+     * The JS context survives, so the query can. Two filters the reader set
+     * deliberately are two filters they meant, which is what composing them
+     * means. */
+    S.lastFilter = active ? { q: raw || "", only: only || null } : null;
     return { shown, total };
   };
 
@@ -625,12 +633,23 @@ globalThis.Shelves = globalThis.Shelves || {};
    * the live page, so main.js owns the single swap.
    */
   S.render = function render(ctx) {
-    const { rows, topics, settings, sourceUl, source, warning, owner, handlers } = ctx;
+    const { rows, settings, sourceUl, owner, handlers } = ctx;
     const names = ctx.names || [];
-    const facts = ctx.facts || [];
-    const notes = ctx.notes || {};
-    const overrides = ctx.overrides || {};
-    const { buckets, order } = S.bucket(rows, topics, settings, names, overrides);
+    /* MUTABLE, because the page is rendered in two passes and the second one
+     * replaces exactly these. `rows` and `names` are NOT in this list and must
+     * never be: `li.dataset.shName = names[i]` is index-parallel and unguarded,
+     * so a second pass over a different row set would stamp every row with the
+     * wrong repository — and the drop target, the override handler and the
+     * audit's by-name filter all address rows by that stamp. */
+    let health = ctx.health;
+    let topics = ctx.topics;
+    let facts = ctx.facts || [];
+    let notes = ctx.notes || {};
+    let overrides = ctx.overrides || {};
+    let source = ctx.source;
+    let warning = ctx.warning;
+    let deferred = ctx.deferred;
+    let { buckets, order } = S.bucket(rows, topics, settings, names, overrides);
     const open = S.collapse.read(owner);
 
     /* Every row is told what it knows about itself ONCE, here, while we still
@@ -661,6 +680,9 @@ globalThis.Shelves = globalThis.Shelves || {};
 
     const host = document.createElement("div");
     host.id = S.HOST_ID;
+    /* Read before the first paint, not applied afterwards: setting it later
+       would draw the roomy page and then collapse it under the reader. */
+    host.dataset.density = S.density.read(owner);
 
     const bar = document.createElement("div");
     bar.className = "sh-bar";
@@ -669,6 +691,28 @@ globalThis.Shelves = globalThis.Shelves || {};
     const collapse = button("collapse all");
     const flat = button("flat list", "GitHub's plain ungrouped list");
     const rescan = button("rescan", "Forget cached facts and read them again");
+
+    /* ---- DENSITY ---------------------------------------------------------
+     * GitHub draws a repository row 109px tall — a description it may not
+     * have, a topic row it may not have, and 24px of padding either side. On
+     * a 77-repo account that is eight screens of scrolling to read a list,
+     * and the shelves cannot help with it because the shelves are not what is
+     * tall.
+     *
+     * Compact is a READING POSTURE and it is CSS only: nothing is removed
+     * from the row, nothing is rebuilt, and every field GitHub adds next year
+     * still arrives (P.V). Toggling it costs one attribute on the host. */
+    const density = button("", "");
+    const paintDensity = () => {
+      const on = host.dataset.density === "compact";
+      density.textContent = on ? "roomy" : "compact";
+      density.dataset.on = on ? "1" : "";
+      density.title = on
+        ? "Back to GitHub's own spacing — descriptions, topics and all"
+        : "One line per repository: the description, the topic chips and the " +
+          "commit graph stand down so more of the list fits on a screen";
+    };
+    paintDensity();
 
     /* ── READ N MORE — the ceiling, drawn as the choice it is ───────────────
      * Rung 4 reads one page per repo, and it now stops at `scrapeMax`. This
@@ -681,12 +725,19 @@ globalThis.Shelves = globalThis.Shelves || {};
      * deliberate limit there would teach the reader to read a choice as a
      * fault. It exists only when there is something to read, so a normal run
      * never carries it. */
-    const more = ctx.deferred > 0
-      ? button("read " + ctx.deferred + " more",
-               ctx.deferred + " repositories were left unread to keep this page " +
-               "load small. Reading them costs one request each, and they are " +
-               "remembered afterwards.")
-      : null;
+    /* Built always and SHOWN when there is something to offer: the first pass
+     * cannot know how many repos rung 4 will defer, so a button that only
+     * exists if it existed at build time could never appear. */
+    const more = button("", "");
+    const paintMore = () => {
+      more.hidden = !(deferred > 0);
+      if (more.hidden) return;
+      more.textContent = "read " + deferred + " more";
+      more.title = deferred + " repositories were left unread to keep this page " +
+        "load small. Reading them costs one request each, and they are " +
+        "remembered afterwards.";
+    };
+    paintMore();
 
     /* ONE BUTTON FOR TWO QUESTIONS, because they are two questions about one
      * collection — what is wrong with the labels (vocab.js) and what is
@@ -701,15 +752,23 @@ globalThis.Shelves = globalThis.Shelves || {};
     const vocab = button("audit",
       "Your collection, read back to you: duplicate topic spellings, blanket " +
       "labels, and the repos missing a description, a README or a licence.");
-    const vdata = S.vocabulary(topics, names);
-    const adata = S.audit(facts, names, topics);
-    const issues = S.vocabIssues(vdata) + S.auditIssues(adata);
-    if (issues) {
+    let vdata = S.vocabulary(topics, names);
+    let adata = S.audit(facts, names, topics);
+    /* THE COUNT RIDES ON THE CLOSED BUTTON, and on a progressive render it is
+     * a count that grows: the cache knows nothing about a repo it has never
+     * read, so the first pass under-reports and must correct itself rather
+     * than settle for the smaller, friendlier number. */
+    const paintBadge = () => {
+      const issues = S.vocabIssues(vdata) + S.auditIssues(adata);
+      const had = vocab.querySelector(".sh-vbadge");
+      if (had) had.remove();
+      if (!issues) return;
       const badge = document.createElement("span");
       badge.className = "sh-vbadge";
       badge.textContent = String(issues);
       vocab.append(" ", badge);
-    }
+    };
+    paintBadge();
 
     /* type="search" and not "text": it gets the browser's own clear button and
      * its Esc-clears behaviour for free, on every platform, correctly. */
@@ -729,32 +788,38 @@ globalThis.Shelves = globalThis.Shelves || {};
 
     /* P.IV — always say which rung answered. When grouping looks wrong this
      * is the first thing anyone needs to know. */
-    const tagged = topics.filter((t) => t && t.length).length;
-    note.textContent =
-      rows.length + " repos · " + order.length + " shelves · " +
-      tagged + " tagged · via " + source;
-    if (warning) {
-      const w = document.createElement("span");
-      w.className = "sh-warn";
-      w.textContent = warning;
-      note.append(" · ", w);
-    }
+    /* ONE FUNCTION, CALLED TWICE. The source line is the sentence P.IV is
+     * about, and a progressive render makes it a sentence that CHANGES — from
+     * what the cache could answer to what the ladder actually climbed. Building
+     * it in place means the two passes can never drift into two different
+     * spellings of the same fact. */
+    const paintNote2 = () => {
+      note.textContent = "";
+      const tagged = topics.filter((t) => t && t.length).length;
+      note.append(rows.length + " repos · " + order.length + " shelves · " +
+                  tagged + " tagged · via " + source);
+      if (warning) {
+        const w = document.createElement("span");
+        w.className = "sh-warn";
+        w.textContent = warning;
+        note.append(" · ", w);
+      }
+      if (health) {
+        const h = document.createElement("span");
+        h.className = "sh-warn sh-canary";
+        h.textContent = health;
+        note.append(" · ", h);
+      }
+    };
+    paintNote2();
     /* THE CANARY GOES WHERE THE OTHER BAD NEWS GOES. It is the same kind of
      * statement as "token rejected (401)" — something upstream is not what we
      * assumed — and giving it its own banner would teach the reader to look in
      * two places for one class of problem. It is drawn louder than a warning
      * when it is grave, because a moved sidebar means every shelf on the page
      * is wrong, and that is not a footnote. */
-    if (ctx.health) {
-      const h = document.createElement("span");
-      h.className = "sh-warn sh-canary";
-      h.textContent = ctx.health;
-      note.append(" · ", h);
-    }
 
-    bar.append(expand, collapse, flat, rescan);
-    if (more) bar.append(more);
-    bar.append(vocab, find, found, note);
+    bar.append(expand, collapse, density, flat, rescan, more, vocab, find, found, note);
     host.appendChild(bar);
 
     /* ---- SUGGESTED SHELVES -----------------------------------------------
@@ -769,14 +834,17 @@ globalThis.Shelves = globalThis.Shelves || {};
     /* Already answered: on a real shelf by topic, by a configured group, or
      * because the reader put it there. `bucketFor` is the one authority on
      * that question and it is the same call the shelving used. */
-    const placed = new Set(
-      names.filter((n, i) =>
-        n && S.bucketFor(topics[i] || [], settings, overrides[n]) !== settings.otherLabel)
-        .map((n) => n.toLowerCase())
-    );
-    const sugs = (handlers.addShelf && ctx.mine !== false)
-      ? S.suggestions(vdata, facts, names, settings, placed) : [];
-    if (sugs.length) {
+    const paintSuggestions = () => {
+      const placed = new Set(
+        names.filter((n, i) =>
+          n && S.bucketFor(topics[i] || [], settings, overrides[n]) !== settings.otherLabel)
+          .map((n) => n.toLowerCase())
+      );
+      const sugs = (handlers.addShelf && ctx.mine !== false)
+        ? S.suggestions(vdata, facts, names, settings, placed) : [];
+      const had = host.querySelector(".sh-suggest");
+      if (had) had.remove();
+      if (!sugs.length) return;
       const strip = document.createElement("div");
       strip.className = "sh-suggest";
       const lead = document.createElement("span");
@@ -823,8 +891,11 @@ globalThis.Shelves = globalThis.Shelves || {};
         });
         strip.append(b);
       });
-      host.appendChild(strip);
-    }
+      /* Always directly under the toolbar, however it got here — `appendChild`
+       * would put a repainted strip below the shelves. */
+      bar.insertAdjacentElement("afterend", strip);
+    };
+    paintSuggestions();
 
     /* Built once and toggled, not rebuilt: the panel holds the reader's place
      * in a long topic list, and re-creating it on every press would scroll
@@ -832,9 +903,9 @@ globalThis.Shelves = globalThis.Shelves || {};
     /* Untagged is a fact about the TOPICS, not about the leftovers shelf: a
      * repo the reader has pinned by hand is off that shelf and still untagged,
      * and it is still worth tagging. */
-    const untagged = names.filter((n, i) => n && !(topics[i] || []).length);
+    let untagged = names.filter((n, i) => n && !(topics[i] || []).length);
 
-    const marks = S.identity(order, settings.otherLabel);
+    let marks = S.identity(order, settings.otherLabel);
     let panel = null;
     vocab.addEventListener("click", () => {
       if (panel) {
@@ -851,6 +922,7 @@ globalThis.Shelves = globalThis.Shelves || {};
          * rather than in a second, differently-shaped list. */
         onPick: (topic) => {
           find.value = topic;
+          onlySet = null;
           S.applyFilter(host, topic);
           find.focus();
         },
@@ -860,7 +932,8 @@ globalThis.Shelves = globalThis.Shelves || {};
          * is the only behaviour that does not need explaining. */
         onRepos: (names_, label) => {
           find.value = "";
-          S.applyFilter(host, "", { names: names_, label });
+          onlySet = { names: names_, label };
+          S.applyFilter(host, "", onlySet);
         },
       });
       panel = document.createElement("div");
@@ -881,8 +954,53 @@ globalThis.Shelves = globalThis.Shelves || {};
       bar.insertAdjacentElement("afterend", panel);
     });
 
-    order.forEach((label) => {
-      const list = buckets.get(label);
+    /* ---- THE WORKBENCH -------------------------------------------------
+     * Ungrouped is where the extension gives up, and on an untagged account it
+     * is the whole page. The one thing that fixes it for good is topics on
+     * GitHub — which P.I forbids us to write, and which is a two-click job the
+     * reader can do in a second IF they are standing on the repo.
+     *
+     * So the funnel is the walk: press it and the next untagged repo opens in
+     * its own tab. ONE AT A TIME, never a fan of thirty tabs — this is a task
+     * you leave and come back to, and the count on the button is where you
+     * left off.
+     *
+     * A FUNCTION because the untagged list is one of the things the second
+     * pass learns: a cache-shelved page thinks half the collection is untagged
+     * until the ladder says otherwise. */
+    const makeBench = (label) => {
+      if (label !== settings.otherLabel || !untagged.length ||
+          !handlers.walk || ctx.mine === false) return null;
+      const bench = document.createElement("button");
+      bench.type = "button";
+      bench.className = "sh-bench";
+      /* Wrapped the same way `walk` wraps it, or the label and the tab
+       * disagree the moment the untagged list shrinks under a stale
+       * bookmark — which is exactly what tagging a repo does. */
+      const done = () => S.bench.at(owner) % untagged.length;
+      const paint = () => {
+        bench.textContent = done()
+          ? "tag them · " + (done() + 1) + " of " + untagged.length
+          : untagged.length + " untagged · tag them";
+      };
+      paint();
+      bench.title =
+        "Opens the next untagged repository in a new tab. Add its topics in " +
+        "the About panel and they show up here — SHELVES never writes to GitHub.";
+      bench.addEventListener("click", (e) => {
+        /* Inside a <summary>: without both of these the shelf also toggles,
+           so the reader loses their place every time they tag a repo. */
+        e.preventDefault();
+        e.stopPropagation();
+        handlers.walk(untagged, owner);
+        paint();
+      });
+      return bench;
+    };
+
+    /* BUILT BY A FUNCTION so the second pass can create a shelf the cache
+     * never knew about without rebuilding the page around it. */
+    const buildShelf = (label, list) => {
       const d = document.createElement("details");
       d.className = "sh-shelf";
       const remembered = open[label];
@@ -919,34 +1037,8 @@ globalThis.Shelves = globalThis.Shelves || {};
        * in its own tab. ONE AT A TIME, never a fan of thirty tabs — this is
        * a task you leave and come back to, and the count on the button is
        * where you left off. */
-      if (label === settings.otherLabel && untagged.length &&
-          handlers.walk && ctx.mine !== false) {
-        const bench = document.createElement("button");
-        bench.type = "button";
-        bench.className = "sh-bench";
-        /* Wrapped the same way `walk` wraps it, or the label and the tab
-         * disagree the moment the untagged list shrinks under a stale
-         * bookmark — which is exactly what tagging a repo does. */
-        const done = () => S.bench.at(owner) % untagged.length;
-        const paint = () => {
-          bench.textContent = done()
-            ? "tag them · " + (done() + 1) + " of " + untagged.length
-            : untagged.length + " untagged · tag them";
-        };
-        paint();
-        bench.title =
-          "Opens the next untagged repository in a new tab. Add its topics in " +
-          "the About panel and they show up here — SHELVES never writes to GitHub.";
-        bench.addEventListener("click", (e) => {
-          /* Inside a <summary>: without both of these the shelf also toggles,
-             so the reader loses their place every time they tag a repo. */
-          e.preventDefault();
-          e.stopPropagation();
-          handlers.walk(untagged, owner);
-          paint();
-        });
-        sum.append(bench);
-      }
+      const bench = makeBench(label);
+      if (bench) sum.append(bench);
 
       d.appendChild(sum);
 
@@ -990,13 +1082,22 @@ globalThis.Shelves = globalThis.Shelves || {};
       d.addEventListener("toggle", () => {
         // a shelf the FILTER opened is not a shelf the reader opened
         if (host.dataset.filtering === "1") return;
+        /* NOR A SHELF THE FIRST PASS GUESSED. Setting `open` before this
+         * listener exists does not save us — `toggle` is queued as a task, so
+         * a listener attached a hundred lines later still receives it. Without
+         * this, a provisional shelf that the finished page then discards would
+         * have written a permanent open-state key for a name nothing will ever
+         * draw again, and `shelves:open:<owner>` has no eviction path. */
+        if (host.dataset.provisional === "1") return;
         const state = S.collapse.read(owner);
         state[label] = d.open;
         S.collapse.write(owner, state);
       });
 
-      host.appendChild(d);
-    });
+      return d;
+    };
+
+    order.forEach((label) => host.appendChild(buildShelf(label, buckets.get(label))));
 
     /* WHAT THIS PAGE WORKED OUT, LEFT WHERE THE OTHER PAGES CAN READ IT.
      * A repo's own page can see its own topics but not its neighbours', and
@@ -1008,13 +1109,22 @@ globalThis.Shelves = globalThis.Shelves || {};
      *
      * Fire and forget: a failed write costs the chip its colour on another
      * page and must never cost this render (P.III). */
-    Promise.resolve(
-      S.shelfmap.write(owner, {
-        order,
-        counts: Object.fromEntries(order.map((l) => [l, buckets.get(l).length])),
-        names: names.filter(Boolean),
-      })
-    ).catch(() => {});
+    const publishMap = () => {
+      /* NEVER FROM A GUESS. The first pass shelves from the cache, and a repo
+       * page opened during that window reads this map to colour its chip — so
+       * publishing a provisional order would have another page draw an
+       * identity the finished page then disagrees with, which is the one
+       * failure the map exists to prevent. */
+      if (ctx.provisional) return;
+      Promise.resolve(
+        S.shelfmap.write(owner, {
+          order,
+          counts: Object.fromEntries(order.map((l) => [l, buckets.get(l).length])),
+          names: names.filter(Boolean),
+        })
+      ).catch(() => {});
+    };
+    publishMap();
 
     expand.addEventListener("click", () =>
       host.querySelectorAll("details").forEach((d) => (d.open = true))
@@ -1023,9 +1133,23 @@ globalThis.Shelves = globalThis.Shelves || {};
       host.querySelectorAll("details").forEach((d) => (d.open = false))
     );
     rescan.addEventListener("click", () => handlers.rescan());
-    if (more) more.addEventListener("click", () => handlers.more());
+    density.addEventListener("click", () => {
+      const next = host.dataset.density === "compact" ? "roomy" : "compact";
+      host.dataset.density = next;
+      S.density.write(owner, next);
+      paintDensity();
+    });
+    more.addEventListener("click", () => handlers.more());
 
-    find.addEventListener("input", () => S.applyFilter(host, find.value));
+    /* THE AUDIT'S BY-NAME FILTER HAS NO TEXT FORM. "the 12 repos with no
+     * description" is not a substring, so remembering `find.value` alone would
+     * silently turn it back into "no filter" on the next repaint. Both halves
+     * are kept, and they are mutually exclusive by construction. */
+    let onlySet = null;
+    find.addEventListener("input", () => {
+      onlySet = null;
+      S.applyFilter(host, find.value);
+    });
     find.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         find.value = "";
@@ -1033,23 +1157,106 @@ globalThis.Shelves = globalThis.Shelves || {};
         find.blur();
       }
     });
-    /* `/` IS GITHUB'S OWN SHORTCUT for its search box, and it is taken here on
+    /* ---- THE KEYS --------------------------------------------------------
+     * `/` IS GITHUB'S OWN SHORTCUT for its search box, and it is taken here on
      * the document because the shelves have replaced the list `/` used to be
-     * about. It stands down inside any field — including GitHub's — so the
-     * only key it ever steals is one pressed while reading the page. */
+     * about. The rest join it for the same reason: the shelves ARE the
+     * navigation now, and a map you can only move around with a mouse is
+     * half a map on a site whose readers live on the keyboard.
+     *
+     *   /      the filter, focused and selected
+     *   j / k  the next / previous shelf
+     *   1-9    that shelf by number, opened
+     *   e / c  expand / collapse every shelf
+     *   Esc    clears the filter (on the box itself)
+     *
+     * EVERY ONE OF THEM STANDS DOWN INSIDE A FIELD — including GitHub's own,
+     * including our note editor — so the only keys they ever steal are ones
+     * pressed while reading. Modifiers are left alone entirely: ctrl+J is the
+     * browser's, and a shortcut that eats it is a bug in someone else's app.
+     *
+     * `j`/`k` MOVE FOCUS, they do not merely scroll. Focus is what a screen
+     * reader follows and what `Enter`/`Space` then act on, so moving it is the
+     * difference between navigating the shelves and animating them. */
     host.dataset.slash = "1";
-    const slash = (e) => {
-      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+    host.dataset.keys = "1";
+
+    const shelvesNow = () => [...host.querySelectorAll("details.sh-shelf")];
+    let cursor = -1;
+
+    const goShelf = (i, open) => {
+      const list = shelvesNow();
+      if (!list.length) return;
+      cursor = ((i % list.length) + list.length) % list.length;
+      const d = list[cursor];
+      if (open) d.open = true;
+      const sum = d.querySelector(".sh-sum");
+      if (!sum) return;
+      /* A <summary> is focusable already; the attribute is for the case where
+         a future GitHub or a future us renders the header as something else. */
+      if (!sum.hasAttribute("tabindex")) sum.setAttribute("tabindex", "0");
+      sum.focus({ preventScroll: true });
+      /* `nearest`, so a shelf already on screen does not jump the page. Guarded
+       * because a headless DOM may not implement it, and a keyboard map that
+       * throws is worse than one that does not scroll. */
+      if (d.scrollIntoView) d.scrollIntoView({ block: "nearest" });
+    };
+
+    const keys = (e) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!host.isConnected) return document.removeEventListener("keydown", keys);
       const t = e.target;
       const tag = t && t.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
           (t && t.isContentEditable)) return;
-      if (!host.isConnected) return document.removeEventListener("keydown", slash);
-      e.preventDefault();
-      find.focus();
-      find.select();
+
+      /* TAKEN, NOT SHARED. GitHub binds `/` on `document` too, and their script
+       * runs long before a content script at `document_idle` — so their
+       * listener is registered first, fires first, and opens the global search
+       * overlay. `preventDefault` from a later listener is far too late.
+       * MEASURED, and only visible in a real browser: `/` put the caret in
+       * GitHub's quick-search and left an overlay over the page. So this
+       * listener is registered in the CAPTURE phase and stops the key there. */
+      if (e.key === "/") {
+        e.preventDefault();
+        e.stopPropagation();
+        find.focus();
+        find.select();
+        return;
+      }
+      if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        e.stopPropagation();
+        const list = shelvesNow();
+        if (cursor < 0) cursor = e.key === "j" ? -1 : 0;
+        goShelf(cursor + (e.key === "j" ? 1 : -1), false);
+        return;
+      }
+      if (e.key >= "1" && e.key <= "9") {
+        const n = Number(e.key) - 1;
+        if (n >= shelvesNow().length) return;   // a number naming no shelf is not ours
+        e.preventDefault();
+        e.stopPropagation();
+        goShelf(n, true);
+        return;
+      }
+      if (e.key === "e" || e.key === "c") {
+        e.preventDefault();
+        e.stopPropagation();
+        host.querySelectorAll("details").forEach((d) => (d.open = e.key === "e"));
+      }
     };
-    document.addEventListener("keydown", slash);
+
+    /* ONE LISTENER, EVEN WHEN THE PAGE RENDERS TWICE. The old handler removed
+     * itself once its host was disconnected — but only on the NEXT keypress,
+     * so between a progressive render's two phases two handlers were live and
+     * `j` moved two shelves. The previous one is taken off here instead. */
+    if (S._keys) document.removeEventListener("keydown", S._keys, true);
+    S._keys = keys;
+    /* Capture, for the reason above — and it is why every branch that acts
+     * also calls `stopPropagation`: capturing without stopping would leave
+     * GitHub's handler to run anyway. */
+    document.addEventListener("keydown", keys, true);
 
     flat.addEventListener("click", () => {
       if (host.dataset.flat === "1") return handlers.reload();
@@ -1063,6 +1270,144 @@ globalThis.Shelves = globalThis.Shelves || {};
       host.appendChild(one);
       flat.textContent = "shelved";
     });
+
+    /* ══ THE SECOND PASS ═══════════════════════════════════════════════════
+     * A cold run spends most of its time on rung 4 — one authenticated fetch
+     * per repo — and until it finishes the reader is looking at GitHub's flat
+     * list. The first pass shelves from what is already free (the page's own
+     * chips, plus every cached record) so the page is usable in the first
+     * frame; this is what happens when the real answer arrives.
+     *
+     * IT RE-BUCKETS RATHER THAN RE-RENDERING, and the difference is the whole
+     * design. Building a second host and swapping it in is four lines and
+     * loses: the text in the find box, the filter that text applied (the
+     * `sh-hide` classes ride on the ROWS and would survive with nothing on
+     * screen explaining them), `data-sh-was-open`, the open audit panel and
+     * the reader's place inside it, keyboard focus, an open shelf-pick menu
+     * and the `data-menu` flag that stops its shelf clipping it — and it
+     * re-parents every row a second time, which is a second chance for
+     * GitHub's own lazy fragments to be cut off mid-flight.
+     *
+     * So nothing is rebuilt that has not changed. A row moves only if its
+     * shelf changed; a shelf is created only if it is new; the summary is
+     * repainted in place rather than replaced, because replacing it takes the
+     * focus `j`/`k` just put there.
+     *
+     * `rows` and `names` are pinned — see the head of this function. */
+    host.rebucket = function rebucket(next) {
+      topics = next.topics || topics;
+      facts = next.facts || facts;
+      if (next.notes) notes = next.notes;
+      if (next.overrides) overrides = next.overrides;
+      if (next.source != null) source = next.source;
+      if (next.warning != null) warning = next.warning;
+      if (next.health != null) health = next.health;
+      if (next.deferred != null) deferred = next.deferred;
+      delete host.dataset.provisional;
+
+      /* A menu open across a re-bucket keeps its element and loses the
+       * `data-menu` flag that stops its shelf clipping it — the scar, exactly,
+       * from the other side. Close it before anything moves. */
+      closeMenus(host);
+
+      const was = { q: find.value, only: onlySet,
+                    on: host.dataset.filtering === "1" };
+
+      const rb = S.bucket(rows, topics, settings, names, overrides);
+      buckets = rb.buckets;
+      order = rb.order;
+      marks = S.identity(order, settings.otherLabel);
+      untagged = names.filter((n, i) => n && !(topics[i] || []).length);
+      vdata = S.vocabulary(topics, names);
+      adata = S.audit(facts, names, topics);
+
+      const shelfOf = (label) =>
+        [...host.querySelectorAll("details.sh-shelf")].find(
+          (d) => (d.querySelector(".sh-name") || {}).textContent === label);
+
+      // 1. every shelf in the new order exists, and only rows move
+      order.forEach((label) => {
+        let d = shelfOf(label);
+        if (!d) {
+          d = buildShelf(label, []);
+          host.appendChild(d);
+        }
+        const ul = d.querySelector("ul");
+        (buckets.get(label) || []).forEach((li) => {
+          /* MOVED ONLY IF IT HAS TO BE. `appendChild` on a row already in this
+           * list would still detach and re-attach it — which is the expensive,
+           * risky half — for no change at all. */
+          if (li.parentElement !== ul) ul.appendChild(li);
+        });
+      });
+
+      // 2. a shelf the finished answer does not name, and holds nothing, goes
+      [...host.querySelectorAll("details.sh-shelf")].forEach((d) => {
+        const label = (d.querySelector(".sh-name") || {}).textContent;
+        if (order.indexOf(label) === -1 && !d.querySelector("li[data-sh-name]")) {
+          d.remove();
+        }
+      });
+
+      // 3. the order on screen becomes the order we computed
+      order.forEach((label, i) => {
+        const d = shelfOf(label);
+        const at = [...host.querySelectorAll("details.sh-shelf")][i];
+        if (d && at !== d) host.insertBefore(d, at || null);
+      });
+
+      // 4. each shelf's own furniture, repainted in place
+      order.forEach((label) => {
+        const d = shelfOf(label);
+        if (!d) return;
+        const mark = marks.get(label);
+        d.classList.toggle("sh-plain", !paintMark(d, mark));
+        const g = d.querySelector(".sh-glyph");
+        if (g) g.textContent = mark ? mark.glyph : "·";
+        const c = d.querySelector(".sh-count");
+        if (c) c.textContent = String(d.querySelectorAll("li[data-sh-name]").length);
+        const sum = d.querySelector(".sh-sum");
+        const old = sum && sum.querySelector(".sh-bench");
+        if (old) old.remove();
+        const bench = makeBench(label);
+        if (sum && bench) sum.append(bench);
+      });
+
+      // 5. what each row knows about itself
+      rows.forEach((li, i) => {
+        const name = names[i] || "";
+        const note = notes[name] || "";
+        const held = li.querySelector(".sh-margin");
+        if (held) paintNote(held, note);
+        li.dataset.shHay = S.haystack(li.dataset.shText || "", facts[i], note);
+      });
+
+      // 6. the toolbar
+      paintNote2();
+      paintSuggestions();
+      paintBadge();
+      paintMore();
+
+      /* 7. AND THE READER GETS THEIR PAGE BACK. The rows keep their `sh-hide`
+       * classes through all of the above, so without this the page would show
+       * a full set of counts, an empty search box, and some repositories
+       * simply missing. */
+      if (was.on) S.applyFilter(host, was.q, was.only);
+
+      publishMap();
+      return host;
+    };
+
+    /* GitHub's dropdowns tear the page down and hand us a new one; if the
+     * reader had something typed, it is put back. A by-name filter from the
+     * audit is NOT restored — it names repositories the new row set may not
+     * contain, and a filter that silently means something else is worse than
+     * none. */
+    if (S.lastFilter && S.lastFilter.q) {
+      find.value = S.lastFilter.q;
+      onlySet = null;
+      S.applyFilter(host, S.lastFilter.q);
+    }
 
     return host;
   };

@@ -70,6 +70,35 @@ STRIKE = """
 """
 
 
+COMPACT = """
+() => {
+  const host = document.getElementById('shelves-host');
+  const btn = [...host.querySelectorAll('.sh-btn')].find(b => b.textContent === 'compact');
+  if (!btn) return null;
+  const rows = () => [...host.querySelectorAll('li[data-sh-name]')]
+    .map(li => Math.round(li.getBoundingClientRect().height))
+    .filter(h => h > 0).sort((a, b) => a - b);
+  host.querySelectorAll('details').forEach(d => d.open = true);
+  const before = rows();
+  btn.click();
+  const after = rows();
+  btn.click();                        // leave the page as we found it
+  const mid = (a) => a[Math.floor(a.length / 2)];
+  return {roomy: mid(before), compact: mid(after), n: before.length};
+}
+"""
+
+
+def measure_compact(page):
+    """COMPACT IS A CLAIM ABOUT PIXELS, so it is only ever true in a browser.
+    jsdom computes no layout: the harness can assert the attribute, the toggle
+    and the memory, and nothing at all about whether the row got shorter."""
+    try:
+        return page.evaluate(COMPACT)
+    except Exception:
+        return None
+
+
 def open_tab(p, user, with_ext):
     args = ["--window-size=1440,1000"]
     if with_ext:
@@ -106,6 +135,7 @@ def main(user):
             return 1
         ours = d["rows"]
         signed_in, stranded = d["signedIn"], d["stranded"]
+        compact = measure_compact(page)
         struck = [(why, page.evaluate(STRIKE, css)) for why, css in SUSPECTS]
         ctx.close()
 
@@ -125,6 +155,13 @@ def main(user):
         print(f"  {stranded} lazy fragments left un-loaded inside rows - "
               "each one is an error blankslate waiting to be revealed")
     print(f"  shelved {sum(h for _, h, _ in pairs)}px   github {sum(w for _, _, w in pairs)}px")
+
+    if compact:
+        gain = round(compact["roomy"] / compact["compact"], 1) if compact["compact"] else 0
+        print(f"  compact: {compact['roomy']}px -> {compact['compact']}px per row "
+              f"({gain}x more rows on a screen, over {compact['n']} rows)")
+    else:
+        print("  compact: not measured - no toolbar button found")
 
     if not grown:
         print("PASS - every shelved row is exactly as tall as GitHub's own")

@@ -320,6 +320,35 @@ globalThis.Shelves = globalThis.Shelves || {};
     },
   };
 
+  /* ---- how tightly the page is drawn ------------------------------------ */
+  /* PER PROFILE, IN localStorage, BESIDE THE COLLAPSE STATE — because it is
+   * the same kind of thing: a reading posture, not a preference. It does not
+   * belong in `settings` and must not ride sync, for a reason that is easy to
+   * miss: the right density depends on the SCREEN, and sync would carry the
+   * choice made on a 27-inch monitor to a laptop where it is wrong.
+   *
+   * Per profile rather than global because the collections differ — your own
+   * 77 repos want compact, a stranger's four do not. */
+  S.density = {
+    key(owner) {
+      return "shelves:density:" + owner;
+    },
+    read(owner) {
+      try {
+        return localStorage.getItem(this.key(owner)) === "compact" ? "compact" : "roomy";
+      } catch (e) {
+        return "roomy";
+      }
+    },
+    write(owner, value) {
+      try {
+        localStorage.setItem(this.key(owner), value === "compact" ? "compact" : "roomy");
+      } catch (e) {
+        /* private mode or a full quota — the page simply opens roomy again */
+      }
+    },
+  };
+
   /* ---- the workbench's place in the queue ------------------------------- */
   /* HOW FAR THROUGH THE UNTAGGED REPOS THE READER HAS WALKED. Deliberately the
    * shallowest storage in this file: localStorage, per profile, not synced,

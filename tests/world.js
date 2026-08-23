@@ -31,7 +31,7 @@ function chip(topic) {
  * nested two levels inside the first. A flatter fake let a real bug through:
  * the note margin is meant to land IN the text column, and with no column to
  * find, the harness could not tell right placement from wrong. */
-function row(owner, name, topics) {
+function row(owner, name, topics, description) {
   const chips = (topics || []).map(chip).join("");
   return (
     `<li class="col-12 d-flex flex-justify-between">` +
@@ -39,6 +39,15 @@ function row(owner, name, topics) {
     `<div class="d-inline-block mb-1">` +
     `<h3><a itemprop="name codeRepository" href="/${owner}/${name}">${name}</a></h3>` +
     `</div>` +
+    /* THE DESCRIPTION IS ON THE ROW, not only on the repo page. GitHub wraps
+       it in a <div> around a <p itemprop="description">, which matters twice
+       over: `place()` positions the note margin relative to that <p>, and
+       COMPACT hides it to get the row onto one line. A fixture without it
+       could not tell either of those apart from a rule that never fired. */
+    (description
+      ? `<div><p class="col-9 d-inline-block color-fg-muted mb-2" ` +
+        `itemprop="description">${description}</p></div>`
+      : "") +
     (chips ? `<div class="topics">${chips}</div>` : "") +
     `</div>` +
     /* THE STAR COLUMN CARRIES A GREAT DEAL OF TEXT NOBODY CAN SEE, and a
@@ -70,7 +79,9 @@ function viewerMeta(viewer) {
 
 /** The profile Repositories tab. `next` renders a pagination link. */
 function profilePage(owner, repos, next, viewer) {
-  const items = repos.map((r) => row(owner, r.name, r.chips)).join("");
+  const items = repos
+    .map((r) => row(owner, r.name, r.chips, r.description))
+    .join("");
   return `<!doctype html><html><head>${viewerMeta(viewer)}</head><body>
     <div id="user-repositories-list">
       <ul class="repo-list" data-filterable-for="your-repos-filter">${items}</ul>
