@@ -22,10 +22,16 @@ rather than guessed:
    latent, on the measurement that rung 1 rendered nothing — *"the day GitHub
    restores chips is the day SHELVES gets worse"*. **That day was 2026-08-22.**
    It is now the first thing on this list by a distance.
-2. **A first run for someone who has never tagged a repo produces the page they
-   already had.** Fifteen seconds of fetching, then one shelf called Ungrouped
-   holding all 76. Everything under *the first day* exists to close that,
-   without ever writing to GitHub.
+2. **A first run for someone who has never tagged a repo used to produce the
+   page they already had.** Fifteen seconds of fetching, then one shelf called
+   Ungrouped holding all 76 — re-measured 2026-08-23 on a live profile at 54
+   public repos, **1** of them tagged, 53 in the leftovers shelf. Everything
+   under *the first day* existed to close that without ever writing to GitHub,
+   and on 2026-08-23 all three of it landed: the same cold start now opens
+   offering `add Java (23)`, `add Go (11)`, `add Python (3)` and
+   `add wiremock (3)`, the leftovers shelf counts `53 untagged · tag them` and
+   hands over one tab per press, and a row dragged onto a shelf stays there.
+   The remaining work in this document is reach, not that gap.
 
 ---
 
@@ -35,7 +41,7 @@ rather than guessed:
 - [x] FIND — `/` searches descriptions, topics, languages, licences, READMEs and your own notes, which GitHub's own box (names only) cannot; shelves count their hits and dim rather than reshuffle `proof: node tests/harness.js find`
 - [x] A PRIVATE MARGIN — one local note per repo, painted on the row, searchable, and never taken by a rescan `proof: node tests/harness.js note`
 - [x] THE VOCABULARY PANEL — the tag system read as a system: spellings of one idea merged, one-character neighbours and narrower words offered as suspicions, blanket labels and single-use topics named, every topic listed and pressable. No request, no storage, nothing written `proof: node tests/harness.js vocabulary`
-- [x] SHELF IDENTITY — a hue and a glyph per shelf, hashed from the name so nothing is stored and nothing can drift; two channels so either one alone identifies a shelf; measured in a real browser for tofu and for 3:1 contrast against both themes `proof: node tests/harness.js identity`
+- [x] SHELF IDENTITY — a hue and a glyph per shelf, hashed from the name so nothing is stored and nothing can drift; two channels, so up to twelve shelves either one alone identifies a shelf and above that the pair does (see *the first day*, where the wrap that broke both at once was found); measured in a real browser for tofu and for 3:1 contrast against both themes `proof: node tests/harness.js identity`
 - [x] THE MARK FOLLOWS THE REPO — a repo's own page wears its shelf's glyph, name and colour, links back to the shelves, and carries the private note, editable in place. Costs no request; reads the shelf map the profile page leaves behind rather than guessing a colour that would disagree `proof: node tests/harness.js mark`
 - [x] THE REPO AUDIT — what is missing across the collection (topics, description, README, licence) and what is archived, each denominated ONLY over the repos whose source could have answered, with what could not be asked said out loud `proof: node tests/harness.js audit`
 - [x] BACKGROUND TOP-UP — the stalest cache entries refreshed while you are elsewhere on github.com, so a week-old cache is never fifteen seconds of waiting. Opt-in, one at a time, bounded per visit, never on the profile tab, stops on the first refusal `proof: node tests/harness.js warm`
@@ -66,9 +72,10 @@ same and a fix nobody can re-run is a fix nobody can trust.
 
 ## The first day — value before the user has tagged anything
 
-- [ ] LOCAL SHELF OVERRIDES: drag a row onto a shelf and it stays there, stored locally, outranking topics — shelving with no topics at all, and still not one write to GitHub `proof: node tests/harness.js override`
-- [ ] Ungrouped becomes a WORKBENCH, not a dump: `31 untagged · tag them` walks the untagged repos one at a time, opening each at its About panel, so the two-click path becomes the extension's own funnel `proof: node tests/harness.js workbench`
-- [ ] SUGGESTED SHELVES on a cold start — topics that match no shelf, shared name prefixes, dominant languages — each offered as `add "rag" as a shelf (7 repos)` and accepted in one click into a normal, editable shelf. `S.vocabulary()` already computes every input this needs and marks which topics are shelves; what is missing is the one write to `settings.groups` `proof: node tests/harness.js suggest`
+- [x] LOCAL SHELF OVERRIDES: a repo goes where the reader says it goes. `S.overrides` in `chrome.storage.local`, `{ "owner/name": "shelf label" }`, checked by `bucketFor()` **before any topic** — and the only path in the extension that can shelve a repo with no topics at all. It landed as TWO gestures onto one write rather than the drag this line asked for: a `⠿` grip in the note margin drags onto a shelf, and pressing the same grip opens a menu of the shelves that exist, which is the half that works from a keyboard and the half a stub DOM can drive. A move writes ONE key and re-homes ONE row with **no reload** — the reader keeps their scroll, their open shelves and the search they were typing, which is why `overrides` had to join main.js's QUIET list — and moving a repo back onto the leftovers shelf DELETES the key rather than storing a withdrawn opinion. Exempt from `cache.clear()` exactly like notes, and for the same reason: no request re-derives one. Measured on the live profile — a row dragged out of Ungrouped onto `config` took the counts from 1 / 53 to 2 / 52 with nothing reloading, and was still 2 / 52 after a full page reload. Still not one write to GitHub `proof: node tests/harness.js override`
+- [x] Ungrouped becomes a WORKBENCH, not a dump: the leftovers shelf's own summary reads `53 untagged · tag them`, one press opens the next untagged repo in its own tab, the label becomes `tag them · 2 of 53`, and past the last one it wraps to the start. One tab per press — a fan of thirty is an ambush, not a funnel. Counted from the **TOPICS** and not from the shelf, so a repo pinned by hand is off the leftovers shelf, still untagged and still worth tagging. The place in the queue is bookmarked in `localStorage` (`shelves:bench:<owner>`) beside the collapse state, because it is a place rather than a preference. The extension still writes nothing: the two-click edit happens in GitHub's own About panel, which is precisely why the walk hands over the tab instead of offering a form `proof: node tests/harness.js workbench`
+- [x] SUGGESTED SHELVES on a cold start — `S.suggestions(vdata, facts, names, settings, placed)` in vocab.js, drawn as a strip above the shelves, each offer `add <label> (N)`, ranked by reach and capped at ten. Three kinds: `topic` (a real tag that is not yet a shelf), `prefix` (a shared leading word in the NAMES — the only signal an account with no topics gives at all) and `language`. What the sketch missed is that only a topic is pure configuration: a prefix and a language match no topic and never will, so the same press that writes `settings.groups` also **pins those repos with overrides**, or it would build an empty shelf and read as broken. Names arrive LOWERCASED (`fullNameOf` lowercases), so the prefix walk sorts the bare names and holds a run together while they still share ≥ 3 leading characters, labelling it with the prefix they actually share — `wiremock`, never `wire`. A repo already on a real shelf is never counted towards a new one, and a suggestion covering more than half the collection is suppressed as the blanket label `vocabulary()` already complains about. Cold start on the live profile: `add Java (23)`, `add Go (11)`, `add Python (3)`, `add wiremock (3)`; accepting `wiremock` gave `{config 1, wiremock 3, Ungrouped 50}` `proof: node tests/harness.js suggest`
+- [x] SHELF IDENTITY SURVIVES THE THIRTEENTH SHELF — a prerequisite, not a feature, and found while building the three above. `identity()` used ONE slot for both channels, so past twelve the walk wrapped and handed out a duplicate hue **and** glyph together: both channels failing at once, which is the one failure two channels exist to prevent, and the README stated the opposite as fact. Not a corner case either — auto-grouping makes one shelf per distinct topic and `suggest` turns accepting a thirteenth into one click. Hue and glyph are now walked independently: twelve or fewer still get twelve distinct hues AND twelve distinct glyphs, unchanged, and above that the PAIR carries the identity, 144 of them. The cost is now stated rather than denied — past twelve, one channel necessarily repeats and the other is what tells two shelves apart `proof: node tests/harness.js identity`
 
 ## Shelves worth the name
 
@@ -98,12 +105,19 @@ same and a fix nobody can re-run is a fix nobody can trust.
 ## Deliberately not doing
 
 - Editing topics from the extension. That is a write; principle I says no. The
-  overrides above are the answer that stays read-only: they live in the
-  browser, and uninstalling still undoes everything.
+  overrides above have shipped and are the answer that stays read-only: the
+  opinion lives in the browser, keyed `owner/name`, and uninstalling still
+  undoes everything. The workbench is the other half of the same answer — it
+  hands the reader the tab and lets GitHub take the write.
 - Grouping by language or stars **as a permanent axis**. Those are filters
   GitHub already ships, and a second axis makes the mental model two things
   instead of one. As a one-time *suggestion* that becomes an ordinary shelf, it
-  is configuration rather than a second axis.
+  is configuration rather than a second axis — **and that is now built**:
+  `S.suggestions()` offers a language a shelf-worth of repos share, and
+  accepting it writes `settings.groups` and pins those repos, producing a shelf
+  indistinguishable from one typed into the options page. There is no
+  "suggested" state to migrate later, and no language axis anywhere. Stars are
+  still not offered: a count is not a name.
 - Syncing shelves to a server. Everything stays in the browser.
 
 ## Open questions
@@ -114,9 +128,13 @@ same and a fix nobody can re-run is a fix nobody can trust.
   that, at the cost of fetching pages nobody has asked for yet.
 - Is a week the right cache TTL? It is configurable, but the default was picked
   by feel and has not been measured against how often anyone re-tags.
-- Should an override survive a repo being renamed? Everything is keyed by
-  `owner/name`, which a rename breaks silently — the repo reappears in
-  Ungrouped, which is the safe failure but not an obvious one.
+- Should an override survive a repo being renamed? **This is live now rather
+  than hypothetical**: overrides ship, keyed `owner/name`, which a rename breaks
+  silently — the repo reappears in Ungrouped, which is the safe failure but not
+  an obvious one, and the old key stays in storage pointing at a name that no
+  longer exists. Nothing anywhere tells the reader the shelving they did by hand
+  was dropped. Surviving it would mean keying by the repo's id, which the
+  profile page does not carry.
 - A count badge on the toolbar icon (how many repos are still untagged) would
   need `action.setBadgeText` from the worker, which knows nothing about the
   page. Worth a permission? Probably not; the toolbar line already says it.

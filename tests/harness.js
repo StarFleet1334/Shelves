@@ -621,6 +621,377 @@ const SCENARIOS = [
     ctx.info = "written, painted, searchable, survives rescan";
   }),
 
+  check("override - the reader's own answer outranks every topic, and never leaves the browser",
+    async (ctx) => {
+    /* THE ONLY SHELF THIS EXTENSION CAN BUILD WITHOUT GITHUB'S HELP. Every
+       other path derives a shelf from a topic, an API field or a repo page -
+       correct, and useless on an account that has never tagged anything.
+       Measured on a real profile: 68 of 77 repos carry no topics. */
+    const w = build({
+      viewer: "octo",
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      overrides: { "octo/nameless": "keep", "octo/tagged": "keep" },
+      repos: [
+        { name: "nameless", topics: [], private: true },           // no topics at all
+        { name: "tagged", topics: ["elsewhere"], private: true },  // topics say otherwise
+        { name: "plain", topics: ["keep"], private: true },
+        { name: "spare", topics: [], private: true },
+      ],
+    });
+    await settle(1400);
+    let v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+    let b = byLabel(v);
+
+    assert(ctx, b.keep && b.keep.count === 3,
+      "an untagged repo AND one whose topics disagree are both held by the " +
+      "override, keep holds: " + ((b.keep || {}).count));
+    assert(ctx, b.Ungrouped && b.Ungrouped.count === 1,
+      "only the repo nobody has an opinion about is left over, got: " +
+      ((b.Ungrouped || {}).count));
+
+    /* AN OVERRIDE IS THE READER'S, SO IT MUST OUTLIVE A RESCAN - the same rule
+       as a note, and for the same reason: no request re-derives it. */
+    await w.win.Shelves.cache.clear();
+    assert(ctx, Object.keys(await w.win.Shelves.overrides.read()).length === 2,
+      "a rescan must not take the reader's own shelving with it");
+
+    /* THE UNIT IS ONE WRITE. Moving a repo writes one key and repaints one
+       row - it must not reload, because that costs the reader their scroll,
+       their open shelves and the search they were typing. */
+    const li = [...w.win.document.querySelectorAll("#shelves-host li")]
+      .find((x) => x.dataset.shName === "octo/spare");
+    assert(ctx, li && li.querySelector(".sh-grip"), "every row carries a grip");
+    if (!li) return;
+    li.querySelector(".sh-grip").click();
+
+    /* THE SHELF CLIPS ITS OWN CHILDREN. `.sh-shelf` carries `overflow: hidden`
+       for its rounded corners, which makes it a clip container — so a menu
+       opened on a row near the bottom of a shelf is cut off and its last
+       entries cannot be clicked. Measured in a real browser: a 26px overhang,
+       and `elementFromPoint` on the last entry returned the NEXT shelf's
+       summary. jsdom computes no layout and cannot see the clipping, so what
+       is asserted here is the mechanism that lifts it — and that it is lifted
+       on exactly one shelf and put back afterwards. */
+    const holder = li.closest("details.sh-shelf");
+    assert(ctx, holder && holder.dataset.menu === "1",
+      "the shelf holding an open menu must stop clipping it");
+    assert(ctx, w.win.document.querySelectorAll("[data-menu]").length === 1,
+      "and only that one, got " + w.win.document.querySelectorAll("[data-menu]").length);
+
+    const pick = [...li.querySelectorAll(".sh-shelfpick")]
+      .find((x) => x.textContent === "keep");
+    assert(ctx, pick, "the menu offers the shelves that exist, and only those");
+    if (!pick) return;
+    pick.click();
+    await settle(400);
+
+    assert(ctx, w.win.document.querySelectorAll("[data-menu]").length === 0,
+      "and the clip goes straight back the moment the menu closes");
+
+    v = readShelves(w.win);
+    b = byLabel(v);
+    assert(ctx, b.keep && b.keep.count === 4,
+      "the row moves at once, without a reload, keep holds: " + ((b.keep || {}).count));
+    const saved = await w.win.Shelves.overrides.read();
+    assert(ctx, saved["octo/spare"] === "keep",
+      "and the move is written down, got: " + JSON.stringify(saved["octo/spare"]));
+
+    /* PUTTING IT BACK REMOVES THE KEY. An override the reader has withdrawn
+       must not linger claiming an opinion they no longer hold. */
+    li.querySelector(".sh-grip").click();
+    const back = [...li.querySelectorAll(".sh-shelfpick")]
+      .find((x) => x.textContent === "Ungrouped");
+    assert(ctx, back, "and the way back is offered too");
+    if (back) back.click();
+    await settle(400);
+    assert(ctx, (await w.win.Shelves.overrides.read())["octo/spare"] === undefined,
+      "moving a repo back to the leftovers shelf clears the override");
+    /* A CONFIGURED SHELF OWNS THE SPELLING OF ITS NAME. An override is stored
+       with whatever label was drawn when it was made; re-casing the group in
+       the options page afterwards would otherwise leave the pinned repos in a
+       second shelf beside the one they were put on. Two shelves for one name
+       is the failure — nothing vanishes, it just quietly doubles. */
+    const cased = w.win.Shelves.bucketFor(["nothing"], { groups: ["Keep"], otherLabel: "Ungrouped" }, "keep");
+    assert(ctx, cased === "Keep",
+      "an override must resolve onto the configured spelling, got: " + cased);
+    /* "PUT THIS ON THE LEFTOVERS SHELF" IS NOT "FORGET MY OPINION". They only
+       agree for a repo with no topics. `octo/plain` carries the topic `keep`,
+       so moving it to Ungrouped has to be STORED - deleting the key was a
+       silent no-op: the row slid over, the counts changed, storage kept
+       nothing, and the next load put it straight back on `keep`. */
+    const tagged = [...w.win.document.querySelectorAll("#shelves-host li")]
+      .find((x) => x.dataset.shName === "octo/plain");
+    if (tagged) {
+      tagged.querySelector(".sh-grip").click();
+      const toLeft = [...tagged.querySelectorAll(".sh-shelfpick")]
+        .find((x) => x.textContent === "Ungrouped");
+      if (toLeft) toLeft.click();
+      await settle(400);
+      assert(ctx, (await w.win.Shelves.overrides.read())["octo/plain"] === "Ungrouped",
+        "moving a TAGGED repo to the leftovers shelf must be stored, or the " +
+        "page and the store disagree until the next load");
+    }
+
+    /* THE DRAG IS THE HEADLINE GESTURE AND IT HAD NO TEST. The drop listener
+       reached for `CSS.escape`, which jsdom does not define - so it threw
+       before doing anything, and a lost drop looks exactly like a drop that
+       missed. It now finds the row by walking, which is testable anywhere. */
+    const dragged = [...w.win.document.querySelectorAll("#shelves-host li")]
+      .find((x) => x.dataset.shName === "octo/nameless");
+    const target = [...w.win.document.querySelectorAll("#shelves-host details.sh-shelf")]
+      .find((d) => d.querySelector(".sh-name").textContent === "Ungrouped");
+    if (dragged && target) {
+      const ev = new w.win.Event("drop", { bubbles: true, cancelable: true });
+      ev.dataTransfer = { getData: () => "octo/nameless", dropEffect: "" };
+      target.dispatchEvent(ev);
+      await settle(400);
+      assert(ctx, dragged.closest("details").querySelector(".sh-name").textContent === "Ungrouped",
+        "a dropped row lands on the shelf it was dropped on");
+      assert(ctx, (await w.win.Shelves.overrides.read())["octo/nameless"] === undefined,
+        "and an untagged repo dropped on the leftovers shelf needs no override");
+    }
+
+    ctx.info = "3 held by hand, 1 left over; survives a rescan; one write per move";
+  }),
+
+  check("suggest - a cold start offers shelves instead of one dump",
+    async (ctx) => {
+    /* THE FIRST RUN FOR SOMEONE WHO HAS NEVER TAGGED A REPO produces the page
+       they already had. Everything needed to fix that was already computed -
+       vocabulary() has every topic with its count, facts has a language, the
+       names are on the rows. What was missing was the write. */
+    const w = build({
+      viewer: "octo",
+      owner: "octo",
+      settings: { groups: [] },              // a cold start: nothing configured
+      apiRepos: [],
+      repos: [
+        { name: "wiremock-api", topics: [], private: true, language: "Java" },
+        { name: "wiremock-data", topics: [], private: true, language: "Java" },
+        { name: "wiremock-demo", topics: [], private: true, language: "Java" },
+        { name: "rag-store", topics: ["rag"], private: true, language: "Python" },
+        { name: "rag-eval", topics: ["rag"], private: true, language: "Python" },
+        { name: "odd-one", topics: [], private: true, language: "Go" },
+      ],
+    });
+    await settle(1600);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+
+    const sugs = [...w.win.document.querySelectorAll("#shelves-host .sh-sug")];
+    const labels = sugs.map((x) => x.textContent);
+    assert(ctx, sugs.length >= 1,
+      "a cold start must offer something, got: " + labels.join(" | "));
+
+    /* IT ONLY OFFERS SHELVES THE READER CANNOT ALREADY SEE. With no groups
+       configured every topic is ALREADY an auto-derived shelf, so `rag` is on
+       the page — offering to add it describes something they are looking at.
+       And the repos it holds are answered, so they are not evidence for a
+       Python shelf either. Both fall out of one rule: a repo already on a real
+       shelf is not counted towards a new one. */
+    assert(ctx, !labels.some((t) => /rag/.test(t)),
+      "a topic that is already a shelf on this page must not be offered: " +
+      labels.join(" | "));
+    assert(ctx, !labels.some((t) => /Python/.test(t)),
+      "nor a language made entirely of repos that shelf already holds: " +
+      labels.join(" | "));
+
+    /* THE PREFIX ONE IS THE POINT. A topic suggestion works on an account that
+       already has topics; this whole section exists for the one that does not,
+       and a shared leading word is the only signal such an account gives. It
+       must be named for what the repos SHARE - `wiremock`, never `wire`. */
+    const pre = sugs.find((x) => x.dataset.kind === "prefix");
+    assert(ctx, pre && /wiremock/.test(pre.textContent),
+      "the shared name is offered, named for what is shared, got: " + labels.join(" | "));
+    if (!pre) return;
+    assert(ctx, /\(3\)/.test(pre.textContent),
+      "with its reach stated, got: " + pre.textContent);
+
+    /* AND IT MUST NOT OFFER UNGROUPED WEARING A HAT. Java is 3 of 6 here;
+       vocabulary() already calls that shape a blanket label, and offering to
+       build one would be the panel recommending what it complains about. */
+    assert(ctx, !labels.some((t) => /Java/.test(t)),
+      "a language covering half the collection is a blanket, not a shelf: " +
+      labels.join(" | "));
+
+    /* ACCEPTED IN ONE CLICK INTO AN ORDINARY SHELF. A prefix matches no topic,
+       so the same press must pin its repos - otherwise it builds an empty
+       shelf and reads as broken. */
+    pre.click();
+    await settle(900);
+    const groups = (await w.win.Shelves.load()).groups;
+    assert(ctx, groups.indexOf("wiremock") !== -1,
+      "it becomes a normal, editable shelf in settings.groups, got: " +
+      JSON.stringify(groups));
+
+    /* AND IT MUST NOT DELETE THE SHELVES ALREADY ON SCREEN. With no groups
+       configured the shelves are auto-derived from topics; the first group
+       written turns that off and anything matching no group falls to
+       leftovers. Caught on the live page: accepting a suggestion took the
+       `config` shelf with it. `rag` is here to be the shelf that must
+       survive. */
+    assert(ctx, groups.indexOf("rag") !== -1,
+      "the auto-derived shelves are carried into the configuration, got: " +
+      JSON.stringify(groups));
+    const after = readShelves(w.win);
+    const b2 = byLabel(after);
+    assert(ctx, b2.rag && b2.rag.count === 2,
+      "and rag still holds its two repos, got: " + ((b2.rag || {}).count));
+    const ov = await w.win.Shelves.overrides.read();
+    const pinned = Object.keys(ov).filter((k) => ov[k] === "wiremock");
+    assert(ctx, pinned.length === 3,
+      "and its repos are pinned, because a name is not a topic GitHub can " +
+      "match - pinned: " + pinned.length);
+    /* A SHELF HOLDING THE WHOLE COLLECTION IS A BLANKET AT ANY SIZE. The
+       "more than half" rule had a floor of six repos, which switched it off
+       exactly where the collection is smallest: five repos all in Go offered
+       `add Go (5)` - the flat list with a name on it. */
+    const tiny = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: [] }, apiRepos: [],
+      repos: "abcde".split("").map((n) => ({
+        name: n, topics: [], private: true, language: "Go",
+      })),
+    });
+    await settle(1400);
+    const offers = [...tiny.win.document.querySelectorAll("#shelves-host .sh-sug")]
+      .map((x) => x.textContent);
+    assert(ctx, !offers.some((t) => /Go/.test(t)),
+      "a language every repo shares is the collection, not a shelf: " +
+      offers.join(" | "));
+    ctx.info = pinned.length + " repos pinned to a shelf named from what they share";
+  }),
+
+  check("workbench - Ungrouped offers the walk instead of being a dump",
+    async (ctx) => {
+    /* The one thing that fixes an untagged account for good is topics on
+       GitHub, which P.I forbids us to write and which takes two clicks IF the
+       reader is standing on the repo. So the funnel is the walk. */
+    const w = build({
+      viewer: "octo",
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      repos: [
+        { name: "one", topics: [], private: true },
+        { name: "two", topics: [], private: true },
+        { name: "three", topics: ["keep"], private: true },
+      ],
+    });
+    await settle(1400);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+
+    const bench = w.win.document.querySelector("#shelves-host .sh-bench");
+    assert(ctx, bench, "the leftovers shelf must carry the walk");
+    if (!bench) return;
+    assert(ctx, /2 untagged/.test(bench.textContent),
+      "counted from the TOPICS, not from the shelf, got: " + bench.textContent);
+
+    /* ONE TAB PER PRESS. A fan of thirty tabs is not a funnel, it is an
+       ambush - and the count is where the reader left off. */
+    const opened = [];
+    w.win.open = (url) => { opened.push(url); return null; };
+    bench.click();
+    assert(ctx, opened.length === 1 && /octo\/one$/.test(opened[0]),
+      "the first press opens the first untagged repo, got: " + opened.join());
+    assert(ctx, /2 of 2/.test(bench.textContent),
+      "and the button says what is NEXT, got: " + bench.textContent);
+    bench.click();
+    assert(ctx, opened.length === 2 && /octo\/two$/.test(opened[1]),
+      "the second press opens the next one, got: " + opened.join());
+
+    /* IT WRAPS RATHER THAN DEAD-ENDING, and the label says so by going back to
+       the beginning: a chore you have walked to the end of is a chore you can
+       start again, not a button that does nothing. */
+    assert(ctx, /2 untagged/.test(bench.textContent),
+      "past the last one it reads as the start again, got: " + bench.textContent);
+    bench.click();
+    assert(ctx, opened.length === 3 && /octo\/one$/.test(opened[2]),
+      "past the end it starts over, got: " + opened.join());
+
+    const shelf = [...w.win.document.querySelectorAll("#shelves-host details.sh-shelf")]
+      .find((d) => d.querySelector(".sh-name").textContent === "Ungrouped");
+    assert(ctx, shelf && shelf.open === true,
+      "and pressing it must never toggle the shelf out from under the reader");
+
+    /* THE LIST SHRINKS AS THE READER WORKS, AND THAT IS THE FEATURE. A
+       bookmark taken against five repos is routinely read against two, and
+       `Math.min` turned that into the one index past the end: the button
+       opened nothing, read "3 of 2", and stayed dead for good because nothing
+       ever moved the bookmark back. Wrapped, a stale bookmark is simply a
+       place in a shorter queue. */
+    /* A BOOKMARK PAST THE END IS THE NORMAL CASE, not an edge one: the list
+       shrinks every time the reader tags something, so a place taken against
+       five repos is routinely read against two. `Math.min` turned that into
+       the one index past the end — the button opened nothing, read "3 of 2",
+       and stayed dead for good, because nothing ever moved the bookmark back.
+       Wrapped, a stale bookmark is just a place in a shorter queue. */
+    w.win.Shelves.bench.set("octo", 7);        // as if five had been tagged
+    const before = opened.length;
+    bench.click();
+    assert(ctx, opened.length === before + 1,
+      "a bookmark past the end must still open something, opened " +
+      (opened.length - before));
+    assert(ctx, !/NaN|of 0/.test(bench.textContent),
+      "and the label must not print nonsense, got: " + bench.textContent);
+    ctx.info = "2 untagged walked one tab at a time; wraps; survives a stale bookmark";
+  }),
+
+  check("not yours - the first-day verbs write the reader's own setup, so they stand down",
+    async (ctx) => {
+    /* P.XIV narrowed the expensive RUNGS to the reader's own repositories.
+       These three narrow the WRITES, which is the same argument one step on.
+       Accepting a suggestion on a stranger's page writes `settings.groups` -
+       the reader's own configuration, over SYNC, on every machine - naming
+       somebody else's topics; and because the first such write flips the page
+       out of auto-group mode, the reader's OWN profile then drew one shelf
+       with everything in it. Measured on a real stranger's page. */
+    const w = build({
+      viewer: "me",
+      owner: "some-stranger",
+      settings: { groups: [] },
+      apiRepos: [
+        { name: "wiremock-api", topics: [] },
+        { name: "wiremock-data", topics: [] },
+        { name: "wiremock-demo", topics: [] },
+        { name: "loose", topics: [] },
+      ],
+      repos: [
+        { name: "wiremock-api", topics: [] },
+        { name: "wiremock-data", topics: [] },
+        { name: "wiremock-demo", topics: [] },
+        { name: "loose", topics: [] },
+      ],
+    });
+    await settle(1400);
+    const v = readShelves(w.win);
+    assert(ctx, v, "a stranger's profile must still be SHELVED - this is a " +
+      "narrowing of the writes, not a refusal of the page");
+    if (!v) return;
+
+    const doc = w.win.document;
+    assert(ctx, doc.querySelectorAll("#shelves-host .sh-sug").length === 0,
+      "no suggestion may be offered for somebody else's collection");
+    assert(ctx, doc.querySelectorAll("#shelves-host .sh-bench").length === 0,
+      "nor a walk through somebody else's untagged repos");
+    assert(ctx, doc.querySelectorAll("#shelves-host .sh-grip").length === 0,
+      "nor a grip that would pin somebody else's repo in the reader's store");
+
+    /* And the read-only half is untouched. */
+    assert(ctx, v.find, "the filter is still there");
+    assert(ctx, doc.querySelector("#shelves-host .sh-bar"), "and the toolbar");
+    assert(ctx, Object.keys(await w.win.Shelves.overrides.read()).length === 0,
+      "and nothing was written");
+    ctx.info = "shelved and searchable; 0 suggestions, 0 walks, 0 grips, 0 writes";
+  }),
+
   check("vocabulary - the tag system, read as a system", async (ctx) => {
     /* Every finding the panel can make, in one small collection:
          project      on 5 of 6 tagged repos      -> a blanket label
@@ -907,6 +1278,36 @@ const SCENARIOS = [
     assert(ctx, readMark(bare.win) === null,
       "with nowhere safe to sit, it draws nothing rather than guessing");
     ctx.info = m.glyph + " " + m.label + " + note, zero requests; survives a renamed sidebar";
+  }),
+
+  check("mark follows an override - the chip and the shelf must never disagree",
+    async (ctx) => {
+    /* THE FAILURE THE WHOLE SHELF MAP EXISTS TO PREVENT. `bucketFor` on this
+       page was called without the third argument, so the chip resolved from
+       TOPICS alone: a repo pinned to `keep` wore `elsewhere`, and an untagged
+       repo pinned to a real shelf wore `Ungrouped`, uncoloured - the feature
+       disagreeing with itself on the one page built to agree with it. */
+    const w = build({
+      viewer: "octo",
+      at: "octo/nameless",
+      owner: "octo",
+      settings: { groups: ["keep", "elsewhere"] },
+      overrides: { "octo/nameless": "keep" },
+      shelfMap: { octo: { order: ["keep", "elsewhere", "Ungrouped"],
+                          counts: { keep: 4 }, at: Date.now() } },
+      page: { name: "nameless", topics: [] },
+      repos: [{ name: "nameless", topics: [] }],
+    });
+    await settle(900);
+    const m = readMark(w.win);
+    assert(ctx, m, "the chip must still be drawn");
+    if (!m) return;
+    assert(ctx, m.label === "keep",
+      "an untagged repo the reader pinned wears the shelf they put it on, got: " +
+      m.label);
+    assert(ctx, !m.plain && m.hue,
+      "and it is coloured like that shelf, not drawn as the leftovers one");
+    ctx.info = "pinned to keep, chip reads keep " + (m.glyph || "");
   }),
 
   check("mark degrades - no shelf map means no colour, never a wrong one",
@@ -1481,18 +1882,42 @@ const SCENARIOS = [
     assert(ctx, slots12 === 12,
       "twelve shelves must get twelve distinct slots, got " + slots12);
 
-    /* Past the palette, colours repeat rather than run out - and the two
-       channels must still agree, so either one alone identifies a shelf for a
-       reader who cannot use the other. */
+    /* PAST THE PALETTE, THE PAIR IS WHAT STAYS UNIQUE.
+       This used to assert that one hue always wore one glyph — a single slot
+       driving both channels. It reads like the stronger promise and it is the
+       weaker one: with twelve slots and thirteen shelves the walk wrapped and
+       handed out a DUPLICATE, the same colour and the same shape together,
+       which is the one failure two channels exist to prevent. Proved with
+       sixteen labels: three shelves on slot 11, all `▽`, all one colour.
+
+       Hue and glyph are now walked independently, so twelve remain twelve
+       distinct hues AND twelve distinct glyphs (asserted above), and above
+       that the PAIR carries the identity — 144 of them. The honest cost, which
+       the README now states: past twelve, one channel necessarily repeats,
+       and the other is what tells the two shelves apart. */
     const m20 = ID("abcdefghijklmnopqrst".split(""), "Ungrouped");
     assert(ctx, m20.size === 20, "every shelf gets an identity, got " + m20.size);
-    const pair = new Map();
-    let agree = true;
+    const pairs = new Set([...m20.values()].map((x) => x.hue + ":" + x.glyph));
+    assert(ctx, pairs.size === 20,
+      "twenty shelves must be twenty distinct hue+glyph pairs, got " + pairs.size);
+    /* And when a hue repeats, the glyph must be the thing that differs - a
+       repeat of BOTH is the collision this replaced. */
+    const byHue = new Map();
+    let bothRepeat = false;
     m20.forEach((x) => {
-      if (pair.has(x.hue) && pair.get(x.hue) !== x.glyph) agree = false;
-      pair.set(x.hue, x.glyph);
+      const seen = byHue.get(x.hue) || new Set();
+      if (seen.has(x.glyph)) bothRepeat = true;
+      seen.add(x.glyph);
+      byHue.set(x.hue, seen);
     });
-    assert(ctx, agree, "a hue and its glyph must never disagree");
+    assert(ctx, !bothRepeat,
+      "two shelves may share a hue, but never a hue AND a glyph");
+
+    /* THE CEILING IS 144, AND IT MUST DEGRADE RATHER THAN COLLAPSE. */
+    const big = ID(Array.from({ length: 144 }, (_, i) => "s" + i), "Ungrouped");
+    const bigPairs = new Set([...big.values()].map((x) => x.hue + ":" + x.glyph));
+    assert(ctx, bigPairs.size === 144,
+      "the pair space is 12x12 and all of it must be reachable, got " + bigPairs.size);
 
     /* Derived, never stored: none of this may have reached the disk. */
     const wrote = Object.keys(w.store.local || {}).concat(Object.keys(w.store.sync || {}));

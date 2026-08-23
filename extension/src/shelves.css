@@ -649,3 +649,157 @@
 #shelves-host li poll-include-fragment.is-error,
 #shelves-host li include-fragment.is-error,
 #shelves-host li [data-show-on-forbidden-error] { display: none !important; }
+
+/* ---- THE FIRST DAY: a shelf you chose, not one GitHub implied ------------
+   Three affordances, one theme: everything here is quiet until the reader is
+   plainly doing the thing it serves. A page of 77 rows each advertising a
+   feature is noise; a row under the cursor is an offer. */
+
+/* The grip lives in the note margin, so it inherits that element's whole
+   argument — already in the text column, already hover-revealed, already
+   measured not to change the row's height. */
+.sh-move { position: relative; flex: none; }
+
+.sh-grip {
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px 0 0;
+  cursor: grab;
+  border: 0;
+  background: transparent;
+  color: var(--fgColor-muted, #8b949e);
+  opacity: 0;
+}
+.sh-grip:active { cursor: grabbing; }
+#shelves-host li:hover .sh-grip,
+.sh-grip:focus { opacity: 1; color: var(--fgColor-default, #e6edf3); }
+
+/* WHILE A DRAG IS IN FLIGHT, EVERY GRIP SHOWS. The reader has committed to
+   moving something; hiding the other rows' handles at that moment tells them
+   the page has no opinion about where it can go. */
+#shelves-host[data-dragging="1"] .sh-grip { opacity: 0.55; }
+
+/* A shelf under the pointer during a drag. An inset ring rather than a border:
+   a border would change the box and shift every row below it at the exact
+   moment the reader is aiming at one. */
+#shelves-host details.sh-shelf[data-over="1"] {
+  box-shadow: inset 0 0 0 2px hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+}
+#shelves-host details.sh-shelf.sh-plain[data-over="1"] {
+  box-shadow: inset 0 0 0 2px var(--borderColor-emphasis, #6e7681);
+}
+
+/* The keyboard's way to the same write. Absolute so a long shelf list cannot
+   grow the row it is anchored to — the row is GitHub's, and the scar about
+   the note margin was exactly this mistake made in flow. */
+.sh-shelflist {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 6px;
+  border: 1px solid var(--borderColor-default, #30363d);
+  /* solid, never translucent: WebView2 and friends make backdrop-filter a
+     coin toss, and a menu you can read the page through is not a menu */
+  background: var(--bgColor-default, #0d1117);
+  box-shadow: 0 8px 24px rgba(1, 4, 9, 0.6);
+}
+.sh-shelfpick {
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--fgColor-default, #e6edf3);
+  white-space: nowrap;
+}
+.sh-shelfpick:hover, .sh-shelfpick:focus {
+  background: var(--bgColor-neutral-muted, #21262d);
+  outline: none;
+}
+/* The shelf it is already on is shown and not offered — removing it would
+   make the list jump around between rows. */
+.sh-shelfpick[data-here="1"] {
+  color: var(--fgColor-muted, #8b949e);
+  cursor: default;
+}
+
+/* ---- suggested shelves --------------------------------------------------
+   Above the shelves because it is about the ones that do not exist yet, and
+   gone entirely when there is nothing to offer — a permanent rail here would
+   be a second toolbar for a job that is finished after a minute. */
+.sh-suggest {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border: 1px dashed var(--borderColor-default, #30363d);
+  border-radius: 6px;
+}
+.sh-sug-lead {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fgColor-muted, #8b949e);
+  margin-right: 2px;
+}
+.sh-sug {
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 1px 10px;
+  border-radius: 2em;
+  cursor: pointer;
+  border: 1px solid var(--borderColor-default, #30363d);
+  background: var(--bgColor-muted, #161b22);
+  color: var(--fgColor-muted, #8b949e);
+}
+.sh-sug b { font-weight: 600; color: var(--fgColor-default, #e6edf3); }
+.sh-sug:hover { border-color: var(--borderColor-emphasis, #6e7681); }
+.sh-sug:disabled { opacity: 0.5; cursor: default; }
+/* A topic is a shelf GitHub can match; a name or a language is one only this
+   browser knows about. Dashed says "held here", the same way the audit's
+   address-by-name button already does. */
+.sh-sug[data-kind="prefix"], .sh-sug[data-kind="language"] { border-style: dashed; }
+
+/* ---- the workbench ------------------------------------------------------
+   It sits in the leftovers shelf's own summary, because that shelf IS the
+   problem it addresses. Bright enough to read as an action, quiet enough not
+   to compete with the shelf's name. */
+.sh-bench {
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  margin-left: 10px;
+  padding: 0 8px;
+  border-radius: 2em;
+  cursor: pointer;
+  font-weight: 400;
+  border: 1px solid var(--borderColor-default, #30363d);
+  background: var(--bgColor-default, #0d1117);
+  color: var(--fgColor-attention, #d29922);
+}
+.sh-bench:hover {
+  border-color: var(--fgColor-attention, #d29922);
+  background: var(--bgColor-neutral-muted, #21262d);
+}
+
+/* The shelf clips its children for its rounded corners, which cuts a menu
+   opened on one of its last rows in half — measured on the live page: a 26px
+   overhang, and the entries past the edge belonged to the next shelf as far as
+   hit-testing was concerned. Lifted only while a menu is actually open, and
+   only on the shelf holding it. */
+#shelves-host details.sh-shelf[data-menu="1"] { overflow: visible; }

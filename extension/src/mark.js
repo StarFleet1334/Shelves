@@ -97,16 +97,28 @@ globalThis.Shelves = globalThis.Shelves || {};
 
   /** The label set the identity has to be resolved over. */
   async function labelsFor(owner, settings) {
+    /* THE MAP FIRST, ALWAYS. `settings.groups` used to win whenever it was
+     * non-empty, on the reasoning that a configured list IS the label set.
+     * It stopped being the whole label set the moment a shelf could exist
+     * because the reader PUT a repo there: `bucket()` draws any label with
+     * rows in it, so the profile resolves identity over a set this page was
+     * reconstructing without those shelves in it — and `identity()` hands out
+     * slots by walking a sorted list, so one extra label shifts the ones after
+     * it. Reproduced: `rag` drawn ◉ on the shelves and ◇ on its own repo page.
+     *
+     * The map is what the profile actually drew, written on every render for
+     * exactly this reason. The configured list stays as the fallback for a
+     * first visit that has no map yet. */
+    const map = await S.shelfmap.read(owner);
+    if (map && Array.isArray(map.order) && map.order.length) {
+      return { order: map.order, counts: map.counts || null };
+    }
     if (settings.groups.length) {
       return { order: settings.groups.concat(settings.otherLabel), counts: null };
     }
     /* Auto-grouping derives its labels from every repo's topics, which this
      * page has no way to see — so without the map there is genuinely no answer,
      * and the chip says the shelf without claiming a colour. */
-    const map = await S.shelfmap.read(owner);
-    if (map && Array.isArray(map.order) && map.order.length) {
-      return { order: map.order, counts: map.counts || null };
-    }
     return null;
   }
 
@@ -213,7 +225,17 @@ globalThis.Shelves = globalThis.Shelves || {};
       if (cached && Array.isArray(cached.topics)) topics = cached.topics;
     }
 
-    const label = S.bucketFor(topics, settings);
+    /* THE READER'S OWN ANSWER REACHES THIS PAGE TOO. Without the third
+     * argument the chip resolves from topics alone, so a repo pinned by hand
+     * wears the shelf its TOPICS name — and an untagged one pinned to a real
+     * shelf wears `Ungrouped`, uncoloured, which is the entire feature
+     * disagreeing with itself on the page built to agree with it. Reproduced:
+     * pinned to `keep`, chip read `elsewhere`.
+     *
+     * It costs nothing: overrides are local, and this page already reads two
+     * other local stores below. */
+    const pinned = (await S.overrides.read())[String(name || "").toLowerCase()];
+    const label = S.bucketFor(topics, settings, pinned);
     const known = await labelsFor(owner, settings);
     const marks = known
       ? S.identity(known.order, settings.otherLabel)

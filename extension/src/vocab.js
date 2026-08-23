@@ -80,6 +80,190 @@ globalThis.Shelves = globalThis.Shelves || {};
    * @returns {object} the vocabulary — counts, families, suspicions, and the
    *          two shapes of topic that cannot do a shelf's job.
    */
+  /* ---- SUGGESTED SHELVES ---------------------------------------------- */
+  /* THE FIRST DAY IS THE HARDEST DAY AND IT IS THE ONE NOBODY BUILT FOR.
+   * A reader who has never tagged a repo gets one shelf called Ungrouped
+   * holding all of them — measured on a real profile, 68 of 77. The audit
+   * already tells them so; it has never been able to offer them anything to
+   * press about it.
+   *
+   * Everything this needs is already computed. `vocabulary()` gives every
+   * topic with its repo count; `facts` carries a language per repo; the names
+   * are on the rows. What was missing was the one write to `settings.groups`.
+   *
+   * THREE KINDS, AND THEY ARE NOT INTERCHANGEABLE:
+   *
+   *   topic     a real tag that is not yet a shelf. The strongest kind: the
+   *             shelving engine already matches topics, so accepting one is
+   *             pure configuration and nothing else has to happen.
+   *   prefix    a shared leading word in the NAMES — WireMock-Api,
+   *             WireMock-Data, WireMock-Demo. The only kind that works on an
+   *             account with no topics at all, which is the account this whole
+   *             section exists for.
+   *   language  a language several repos share. Named in "deliberately not
+   *             doing" as forbidden AS A PERMANENT AXIS and explicitly allowed
+   *             as a one-time suggestion that becomes an ordinary shelf. That
+   *             distinction is the whole reason this returns a shelf name and
+   *             not a filter.
+   *
+   * A prefix or a language shelf matches no topic, so accepting one has to
+   * write OVERRIDES for the repos it named as well as the shelf itself —
+   * which is why `repos` is carried on every suggestion and not just a count.
+   * A topic suggestion carries them too, and the caller simply does not need
+   * them. One shape, one accept path.
+   */
+  const STOP = /^(the|a|my|new|test|demo|app|project|repo|old|tmp|temp|main|src|www)$/i;
+
+  /* NAMES ARRIVE LOWERCASED. `fullNameOf` lowercases, and so does the API
+   * body, so `GymCRM-System` reaches this file as `gymcrm-system` and every
+   * camel boundary the first version leaned on is already gone. Grouping has
+   * to work on the characters that survive.
+   *
+   * So: sort the bare names and walk them, keeping a run together while the
+   * prefix they ALL share is still at least three characters. Sorting is what
+   * makes one pass enough — names sharing a prefix are adjacent. The label is
+   * that shared prefix, which is why `wiremock-api|-data|-demo` becomes
+   * `wiremock` and not `wire`, and why `gym`, `gym-project`, `gymapplication`
+   * and `gymcrm-system` become one `gym` rather than three singletons. */
+  const MIN_PREFIX = 3;
+
+  const bareOf = (n) => String(n || "").split("/").pop().toLowerCase();
+
+  function common(a, b) {
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    /* Never end on half a surrogate pair: `common` walks UTF-16 code units, so
+     * two names agreeing up to an emoji and differing inside it would yield a
+     * lone surrogate as the shelf's NAME. `safeRepo` makes that unreachable
+     * from GitHub today, which is a reason to spend one line on it rather than
+     * a reason to leave a function that can return broken text. */
+    if (i > 0 && i < a.length) {
+      const c = a.charCodeAt(i - 1);
+      if (c >= 0xd800 && c <= 0xdbff) i--;
+    }
+    return a.slice(0, i);
+  }
+
+  /** @returns {Array<{label, repos: string[]}>} */
+  function prefixRuns(names) {
+    const rows = names
+      .map((n) => ({ full: n, bare: bareOf(n) }))
+      .filter((r) => r.bare)
+      .sort((a, b) => a.bare.localeCompare(b.bare));
+    const runs = [];
+    let run = null;
+    for (const r of rows) {
+      if (run) {
+        const pre = common(run.pre, r.bare);
+        if (pre.length >= MIN_PREFIX) {
+          run.pre = pre;
+          run.repos.push(r.full);
+          continue;
+        }
+        runs.push(run);
+      }
+      run = { pre: r.bare, repos: [r.full] };
+    }
+    if (run) runs.push(run);
+    return runs
+      .map((x) => ({ label: x.pre.replace(/[-_.\s]+$/, ""), repos: x.repos }))
+      .filter((x) => x.label.length >= MIN_PREFIX && !STOP.test(x.label));
+  }
+
+  /**
+   * @returns {Array<{kind, label, count, repos: string[], why: string}>}
+   *          ranked, capped, and empty when there is nothing worth offering.
+   */
+  /**
+   * @param {Set<string>=} placed  repos already on a real shelf — by topic, by
+   *        a configured group, or because the reader put them there by hand.
+   *
+   * A REPO THAT ALREADY HAS A SHELF IS NOT EVIDENCE FOR ANOTHER ONE, and
+   * counting it is not a rounding error, it is a promise the shelf cannot
+   * keep: an override outranks every topic, so a repo pinned to `wiremock`
+   * will never land on a `Java` shelf however many times it is counted
+   * towards one. Measured on the live page — accepting `wiremock` left the
+   * next suggestion reading `add Java (26)` for 23 repos it could get.
+   *
+   * It also settles a subtler case for free. With no groups configured every
+   * topic is ALREADY an auto-derived shelf, so offering to add one describes
+   * a shelf the reader is looking at. Excluding placed repos drops those
+   * offers to zero without a rule of their own.
+   */
+  S.suggestions = function suggestions(vdata, facts, names, settings, placed) {
+    const out = [];
+    const nm = (names || []).map((n) => String(n || "").toLowerCase());
+    const total = nm.filter(Boolean).length;
+    const groups = ((settings || {}).groups || []).map((g) => g.toLowerCase());
+    const isShelf = (label) => groups.indexOf(String(label).toLowerCase()) !== -1;
+    const done = placed || new Set();
+
+    /* A SHELF THAT HOLDS HALF THE COLLECTION IS UNGROUPED WEARING A HAT.
+     * `vocabulary()` already names that shape as a "blanket label" and treats
+     * it as a finding; offering to build one would be the panel recommending
+     * the very thing it complains about. On the profile this was measured
+     * against, Java is 37 of 77 — a Java shelf is not a shelf. */
+    /* A SHELF HOLDING THE WHOLE COLLECTION IS A BLANKET AT ANY SIZE. The
+     * `total >= 6` floor exists so a 7-repo account is not refused a 4-repo
+     * shelf, and it switched the rule off exactly where the collection is
+     * smallest: five repos all in Go offered `add Go (5)`, which is the flat
+     * list with a name on it. The floor now applies only to the "more than
+     * half" half; covering EVERYTHING is always a blanket. */
+    const blanket = (n) => n >= total || (total >= 6 && n > total / 2);
+
+    /* A repo already answered by a suggestion is not evidence for the next
+     * one. Without this the same repos argue for a topic, then a prefix, then
+     * a language, and the reader is offered three shelves for one set. */
+    const spoken = new Set(done);
+
+    (vdata.terms || []).forEach((t) => {
+      if (isShelf(t.topic)) return;
+      const repos = t.repos.map((r) => String(r).toLowerCase())
+                           .filter((r) => !spoken.has(r));
+      if (repos.length < 2 || blanket(repos.length)) return;
+      out.push({
+        kind: "topic", label: t.topic, count: repos.length, repos,
+        why: "a topic " + repos.length + " repos already carry",
+      });
+      repos.forEach((r) => spoken.add(r));
+    });
+
+    prefixRuns(nm.filter((n) => n && !spoken.has(n))).forEach((run) => {
+      if (run.repos.length < 3 || isShelf(run.label) || blanket(run.repos.length)) return;
+      out.push({
+        kind: "prefix", label: run.label, count: run.repos.length, repos: run.repos,
+        why: run.repos.length + " repos whose names start with it",
+      });
+      run.repos.forEach((r) => spoken.add(r));
+    });
+
+    const byLang = new Map();
+    (facts || []).forEach((f, i) => {
+      const l = f && f.language;
+      const n = nm[i];
+      if (!l || !n || spoken.has(n)) return;
+      if (!byLang.has(l)) byLang.set(l, []);
+      byLang.get(l).push(n);
+    });
+    [...byLang.entries()].forEach(([l, repos]) => {
+      if (repos.length < 3 || isShelf(l) || blanket(repos.length)) return;
+      out.push({
+        kind: "language", label: l, count: repos.length, repos,
+        why: repos.length + " repos written in it",
+      });
+    });
+
+    /* Ranked by reach, and CAPPED — a suggestion list longer than the shelves
+     * it offers to build is a second dump. Ten is also roughly where the
+     * palette stops having a spare hue (identity(), view.js), so it is where
+     * more offers stop being more legible. */
+    return out
+      .sort((a, b) => b.count - a.count ||
+                      a.kind.localeCompare(b.kind) ||
+                      a.label.localeCompare(b.label))
+      .slice(0, 10);
+  };
+
   S.vocabulary = function vocabulary(topicsPerRepo, names) {
     const rows = Array.isArray(topicsPerRepo) ? topicsPerRepo : [];
     const nm = names || [];

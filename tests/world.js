@@ -211,6 +211,7 @@ function bootWorker(fetchImpl, counters) {
  *   repos       [{name, chips?, private?, topics?}] — page 1
  *   page2       [{...}] optional second page
  *   apiRepos    what the API answers with, or a number for an HTTP error
+ *   overrides   seed for local `overrides` — { "owner/name": "shelf" }
  *   apiPublic   the same, for the UNAUTHENTICATED door only — so a run
  *               can have a dead token and a working public endpoint
  *   settings    seed for chrome.storage.sync
@@ -224,7 +225,8 @@ function build(opts) {
     local: { token: opts.token || "", repoFacts: opts.cache || {},
              topicCache: opts.legacyCache || {},
              shelfMap: opts.shelfMap || {},
-             notes: opts.notes || {} },
+             notes: opts.notes || {},
+             overrides: opts.overrides || {} },
   };
   const counters = { api: 0, lastAuth: false, pages: [], scraped: [] };
 

@@ -74,10 +74,32 @@ globalThis.Shelves = globalThis.Shelves || {};
       );
 
       const notes = await S.notes.read();
+      const overrides = await S.overrides.read();
+
+      /* ── THE FIRST-DAY VERBS ARE FOR YOUR OWN PROFILE ────────────────────
+       * P.XIV narrowed the expensive RUNGS to the reader's own repositories;
+       * these three narrow the WRITES, which is the same argument one step
+       * further. Suggestions and the walk are about a collection the reader
+       * curates, and on a stranger's page they are worse than useless:
+       *
+       *   accepting one writes `settings.groups` — the reader's own
+       *     configuration, over SYNC, on every machine — naming somebody
+       *     else's topics, and pins overrides keyed to somebody else's repos;
+       *   and because the first write flips the page out of auto-group mode,
+       *     the next visit to their OWN profile drew ONE shelf with everything
+       *     in it. Measured on torvalds' page: one press offered
+       *     `add subsurface (3)`, and the reader's own three shelves collapsed
+       *     to `Ungrouped: 3`.
+       *
+       * The read-only half of the page is untouched — a stranger's profile is
+       * still shelved, still searchable, still audited. Only the verbs that
+       * write the reader's own setup stand down, and they stand down by not
+       * being handed to render() at all, so there is no affordance to press. */
+      const mine = S.isMine();
 
       const host = S.render({
         rows, topics, facts, names, notes, settings, sourceUl, source, warning,
-        health, owner, deferred,
+        health, owner, deferred, overrides, mine,
         handlers: {
           reload: () => location.reload(),
           /* THE ONLY VERB HERE THAT DELIBERATELY SPENDS REQUESTS. It reloads
@@ -104,6 +126,101 @@ globalThis.Shelves = globalThis.Shelves || {};
            * row it belongs to, and it refreshes that row's haystack so the
            * filter can find it on the very next keystroke — all without
            * costing the reader their scroll position or the shelves' state. */
+          /* ---- the reader's own answer -------------------------------
+           * ONE WRITE AND NO RELOAD. A move is not a re-derivation: the row is
+           * already on the page, the shelves are already drawn, and the only
+           * thing that changed is which of them holds it. Reloading would cost
+           * the reader their scroll, their open shelves and the search they
+           * were in the middle of — as the reward for tidying one repo.
+           *
+           * `overrides` is in the QUIET list below for the same reason: the
+           * storage listener reloads on any setting it did not expect, and
+           * without the exemption every move would reload the page it just
+           * updated. */
+          override: async (name, label, li) => {
+            /* "PUT THIS ON THE LEFTOVERS SHELF" AND "FORGET MY OPINION" ARE
+             * TWO VERBS SHARING ONE GESTURE, and they only agree for a repo
+             * with no topics. Deleting the key on any move to the leftovers
+             * shelf was silently a no-op for a TAGGED repo: the row slid over,
+             * the counts changed, storage kept nothing, and the next load put
+             * it straight back on its topic's shelf. The page and the store
+             * disagreed for the rest of the session.
+             *
+             * So the question is what the repo would do with no opinion at
+             * all. If it would land here anyway, an override is noise and the
+             * key goes; if it would land somewhere else, the reader has said
+             * something and it is stored — including the leftovers label. */
+            const i = names.indexOf(name);
+            const natural = S.bucketFor(i >= 0 ? topics[i] || [] : [], settings);
+            const { ok } = await S.overrides.set(name, natural === label ? "" : label);
+            if (!ok) return;
+            /* The write is the truth; this is the page catching up. If the
+             * shelf has gone (a filter, a re-render) the next load still puts
+             * the row in the right place. */
+            if (li) S.moveRow(host, li, label);
+          },
+
+          /* ---- a suggestion becomes an ordinary shelf ------------------
+           * A TOPIC SUGGESTION IS PURE CONFIGURATION — the shelving engine
+           * already matches topics, so `groups` alone does the work. A prefix
+           * or a language matches no topic and never will, so the repos it
+           * named are pinned with overrides in the same press. Without that,
+           * accepting `wiremock` would build an empty shelf and look broken.
+           *
+           * The reload is the storage listener's, not ours: `groups` is not
+           * QUIET, so writing it re-runs the whole pass and the new shelf
+           * arrives drawn, coloured and editable in the options page like any
+           * other. That is the point — there is no "suggested" state to
+           * migrate later. */
+          addShelf: async (sug, onScreen) => {
+            /* TRUNCATED ONCE, HERE, so both stores agree. `groups.add` and
+             * `overrides.set` each cap a label at 60 characters; this path
+             * wrote the override object directly and skipped it, so a longer
+             * label produced a 60-char shelf and 70-char pins — two shelves,
+             * one of them empty. */
+            const label = String(sug.label || "").trim().slice(0, 60);
+            if (!label) return;
+            if (sug.kind !== "topic" && sug.repos && sug.repos.length) {
+              const all = await S.overrides.read();
+              sug.repos.forEach((r) => { all[String(r).toLowerCase()] = label; });
+              await S.overrides.write(all);
+            }
+            /* KEEPING WHAT IS ALREADY ON SCREEN. With no groups configured the
+             * shelves are auto-derived from topics; the first group written
+             * turns that off, and a repo matching no group becomes leftovers.
+             * So the first accept carries the visible shelves with it, in the
+             * order they are drawn, and the new one goes last. Without this,
+             * accepting a suggestion deletes every shelf the reader already
+             * had — measured on the live page, `config` vanished. */
+            const keep = settings.groups.length ? [] : (onScreen || []);
+            const { ok } = await S.groups.add(keep.concat([label]));
+            /* THE RELOAD IS THE ONLY FEEDBACK THIS PRESS HAS. It comes from
+             * the storage listener noticing `groups`, so a rejected write —
+             * quota, MAX_WRITE_OPERATIONS_PER_MINUTE — leaves the button
+             * disabled reading "adding …" for good, on a page that never
+             * changes. `overrides` is QUIET by design and cannot stand in.
+             * Reproduced by stubbing the write to fail. */
+            return { ok };
+          },
+
+          /* ---- the walk ------------------------------------------------
+           * One tab per press. `window.open` is only permitted inside a user
+           * gesture, which is exactly the guarantee we want: nothing here can
+           * open a tab the reader did not ask for. */
+          walk: (untagged, who) => {
+            if (!untagged.length) return;
+            /* MODULO, NEVER `Math.min`. Clamping to `length` yields the one
+             * index that is past the end, and the bookmark is only ever
+             * compared against a list that SHRINKS as the reader tags things.
+             * Measured: walk to 3 of 5, tag three repos, come back to a list
+             * of 2 — the button opened nothing, read "3 of 2", and stayed
+             * dead for good, because nothing ever moved the bookmark back.
+             * The list getting shorter is the feature working. */
+            const at = S.bench.at(who) % untagged.length;
+            S.bench.set(who, (at + 1) % untagged.length);
+            window.open("https://github.com/" + untagged[at], "_blank", "noopener");
+          },
+
           note: async (name, text) => {
             const { notes: after } = await S.notes.set(name, text);
             const i = names.indexOf(name);
@@ -202,7 +319,7 @@ globalThis.Shelves = globalThis.Shelves || {};
    * `shelfMap` joins them for a sharper reason: this page WRITES it on every
    * render, so without the exemption every render would trigger a reload,
    * which would render, which would write it again. */
-  const QUIET = ["topicCache", "repoFacts", "notes", "shelfMap"];
+  const QUIET = ["topicCache", "repoFacts", "notes", "shelfMap", "overrides"];
   try {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "sync" && area !== "local") return;

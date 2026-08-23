@@ -47,6 +47,7 @@ globalThis.Shelves = globalThis.Shelves || {};
   const FACTS_KEY = "repoFacts";
   const NOTES_KEY = "notes";
   const MAP_KEY = "shelfMap";
+  const OVER_KEY = "overrides";
   const MAX_FACTS = 3000;   // far above any real account, far below the quota
 
   const api = () =>
@@ -192,6 +193,79 @@ globalThis.Shelves = globalThis.Shelves || {};
     },
   };
 
+  /* ---- overrides: { "owner/name": "shelf label" } ----------------------- */
+  /* THE ONLY SHELF THIS EXTENSION CAN PUT A REPO ON WITHOUT GITHUB'S HELP.
+   *
+   * Everything else here derives a shelf from something GitHub holds — a topic
+   * chip, an API field, a repo page. On an account that has never tagged
+   * anything that machinery is correct and useless: measured on a real
+   * profile, 68 of 77 repos carry no topics and can only ever land in the
+   * leftovers shelf. An override is the reader answering the question
+   * themselves.
+   *
+   * IT IS READ-ONLY ABOUT GITHUB, WHICH IS THE WHOLE DESIGN. P.I forbids
+   * editing topics; the roadmap's "deliberately not doing" says so in as many
+   * words. This reaches the same outcome from the other side: the opinion
+   * lives in the browser, and uninstalling still undoes everything.
+   *
+   * LOCAL, and exempt from `cache.clear()`, for exactly the reason notes are:
+   * no request re-derives it. It is the second thing in this file that a
+   * rescan must not take, and the two are now the whole of that category. */
+  S.overrides = {
+    async read() {
+      const got = await get("local", { [OVER_KEY]: {} });
+      const o = got[OVER_KEY];
+      return o && typeof o === "object" ? o : {};
+    },
+    write(all) {
+      return set("local", { [OVER_KEY]: all });
+    },
+    /** An empty label REMOVES the override, so putting a repo back where its
+     *  topics say it belongs needs no second verb — and cannot leave a key
+     *  behind claiming an opinion the reader has withdrawn. */
+    async set(name, labelIn) {
+      const all = await this.read();
+      const key = String(name || "").toLowerCase();
+      const label = String(labelIn == null ? "" : labelIn).trim().slice(0, 60);
+      if (!key) return { ok: false, overrides: all };
+      if (label) all[key] = label;
+      else delete all[key];
+      const ok = await this.write(all);
+      return { ok, overrides: all };
+    },
+  };
+
+  /* ---- the one write to the reader's own configuration ------------------ */
+  /* Every other write in this file is derived, disposable or private. This one
+   * is the reader's setup, so it is deliberately small and deliberately
+   * additive: a suggestion accepted becomes an ORDINARY shelf, indistinguishable
+   * from one typed into the options page, editable and removable there. There
+   * is no "suggested shelf" state to migrate later.
+   *
+   * Appending, never reordering: `settings.groups` is also the shelves' drawing
+   * order, and quietly rearranging a reader's page is not what pressing `add`
+   * asked for. */
+  S.groups = {
+    /** @param {string|string[]} labelIn — one shelf, or several in one write. */
+    async add(labelIn) {
+      const want = (Array.isArray(labelIn) ? labelIn : [labelIn])
+        .map((l) => String(l == null ? "" : l).trim().slice(0, 60))
+        .filter(Boolean);
+      if (!want.length) return { ok: false, groups: [] };
+      const settings = await S.load();
+      const groups = Array.isArray(settings.groups) ? settings.groups.slice() : [];
+      const has = (l) => groups.some((g) => g.toLowerCase() === l.toLowerCase());
+      const added = want.filter((l) => !has(l));
+      if (!added.length) return { ok: true, groups, already: true };
+      added.forEach((l) => groups.push(l));
+      /* ONE WRITE FOR THE WHOLE ACCEPT, not one per label. Each write to a
+       * non-QUIET key reloads the page (main.js), so a loop here would be a
+       * loop of page loads, each racing the next. */
+      const ok = await set("sync", { groups });
+      return { ok, groups, added };
+    },
+  };
+
   /* ---- the shelf map: what the profile page worked out, left for the ----
    * ---- pages that cannot work it out for themselves ---------------------
    *
@@ -242,6 +316,42 @@ globalThis.Shelves = globalThis.Shelves || {};
         localStorage.setItem(this.key(owner), JSON.stringify(state));
       } catch (e) {
         /* private mode, quota, disabled storage — a forgotten shelf is not a bug */
+      }
+    },
+  };
+
+  /* ---- the workbench's place in the queue ------------------------------- */
+  /* HOW FAR THROUGH THE UNTAGGED REPOS THE READER HAS WALKED. Deliberately the
+   * shallowest storage in this file: localStorage, per profile, not synced,
+   * not in chrome.storage at all.
+   *
+   * It is a bookmark in a chore, not a preference and not data — losing it
+   * costs one repeat of a tab you already closed, which is why none of the
+   * ceremony the other stores need applies here. It lives beside `collapse`
+   * because that is the other thing on this page that remembers where you
+   * were rather than what you decided.
+   *
+   * IT MUST BE WRAPPED BY THE CALLER, not clamped. The untagged list shrinks
+   * every time the reader tags something, so a bookmark taken against five
+   * repos is routinely read against two — and `Math.min` turns that into the
+   * one index past the end, which opens nothing and never recovers. Both
+   * callers take it modulo the live length. */
+  S.bench = {
+    key(owner) {
+      return "shelves:bench:" + owner;
+    },
+    at(owner) {
+      try {
+        return Math.max(0, Number(localStorage.getItem(this.key(owner))) || 0);
+      } catch (e) {
+        return 0;
+      }
+    },
+    set(owner, n) {
+      try {
+        localStorage.setItem(this.key(owner), String(Math.max(0, n | 0)));
+      } catch (e) {
+        /* the walk simply restarts from the top next time */
       }
     },
   };

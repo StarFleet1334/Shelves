@@ -15,6 +15,12 @@ And **audit** reads the collection back to you: which topics are three spellings
 of one idea, which are on everything and therefore group nothing, and which of
 your repos have no description, no README or no licence.
 
+It has an answer for the first day, too — the account that has never tagged
+anything, where grouping by topic is correct and useless. It **suggests** the
+shelves your repository names and languages already imply, **walks** you through
+the untagged repos one tab at a time, and lets you put a repo on a shelf **by
+hand**. All three are kept in this browser; none of them writes to GitHub.
+
 It no longer lives on one page. Open a repo and it wears its shelf's mark, in the
 shelf's colour, with your private note — and if you let it, it quietly keeps its
 cache warm while you are elsewhere on GitHub so you never wait out a cold read
@@ -77,6 +83,59 @@ any repo: **About** (right sidebar) → ⚙ gear → **Topics** → type a label
 Enter → **Save changes**. GitHub lowercases them, so `AiProject` becomes
 `aiproject`.
 
+SHELVES will never do that for you — writing a topic is a write. What it does
+instead is queue the job and hand you the tab: see *the workbench*, below.
+
+### Before you have tagged anything
+
+An account that has never used topics gets back the page it already had: one
+shelf called Ungrouped holding everything. On the profile this was last measured
+against — **54 public repos, 1 of them tagged** — every other feature here is
+correct and useless. Three things answer that, and not one of them writes to
+GitHub.
+
+#### Suggested shelves
+
+A strip above the shelves offers what the collection already says about itself,
+each as `add <label> (N)`, ranked by reach and capped at ten. Three kinds:
+
+- a **topic** several repos carry that is not a shelf yet — the strongest kind,
+  because the shelving engine already matches topics
+- a **shared leading word in the names** — `wiremock-api`, `wiremock-data` and
+  `wiremock-demo` become `wiremock`, named for what they actually share rather
+  than for `wire`. This is the only signal an account with no topics gives at all
+- a **language** several repos are written in
+
+That cold start offered `add Java (23)`, `add Go (11)`, `add Python (3)` and
+`add wiremock (3)`.
+
+Pressing one writes an **ordinary shelf** into your settings — editable,
+reorderable and removable on the options page exactly like one you typed, with
+no "suggested" state to migrate later. A name and a language are not topics
+GitHub can match, so accepting one of those also **pins** the repos it named
+using the overrides below; without that it would build a shelf and leave it
+empty. Accepting `add wiremock (3)` gave `config 1 · wiremock 3 · Ungrouped 50`.
+
+Two things it will not offer. A suggestion covering more than half the
+collection is suppressed — **audit** already names that shape as a blanket
+label, and a shelf holding half your repos is the flat list wearing a hat. And a
+repo that already has a shelf is never counted towards a new one: an override
+outranks every topic, so a repo pinned to `wiremock` can never land on a `Java`
+shelf, however many times it is counted towards one.
+
+#### The workbench
+
+The leftovers shelf's own summary reads `53 untagged · tag them`. Press it and
+the next untagged repo opens in its own tab, where the two-click edit — About →
+⚙ → **Topics** — is the thing that actually fixes it for good. The label then
+reads `tag them · 2 of 53`, and past the last one it wraps back to the start.
+One tab per press, never a fan of thirty.
+
+The count comes from the **topics**, not from the shelf: a repo you pinned by
+hand is off the leftovers shelf and still untagged, and still worth tagging.
+Your place in the queue is remembered per profile, so this is a chore you can
+leave and come back to.
+
 ### Choose your shelves
 
 Click the extension's icon (or `chrome://extensions` → *Details* → *Extension
@@ -118,6 +177,38 @@ charter states as the single exception to principle I.
 
 Press **Save**. The GitHub tab reloads itself.
 
+### Put a repo on a shelf yourself
+
+Some repos will never carry a topic, and some carry one that says the wrong
+thing. Hover a row and a grip `⠿` appears in the note margin beside the pencil:
+**drag it onto a shelf**, or **press it** for a list of the shelves that exist.
+Two gestures, one write — dragging is the one that feels like shelving, and the
+menu is the one that works from a keyboard and does not need a steady hand on a
+77-row page.
+
+An override **outranks every topic**, and it is the only thing here that can
+shelve a repo with no topics at all — which on an untagged account is most of
+them. It is stored against `owner/name` in this browser, which is what keeps
+this a lens: nothing reaches GitHub, and uninstalling undoes all of it.
+
+Moving a repo writes **one key** and re-homes **one row**. There is no reload, so
+you keep your scroll, your open shelves and the search you were in the middle
+of. Dragging a row out of Ungrouped onto `config` took the counts from 1 / 53 to
+2 / 52 with nothing else on the page moving — and after a full page reload it
+was still 2 / 52.
+
+Moving a repo back onto the leftovers shelf **deletes** the key rather than
+storing an opinion you have withdrawn. For a repo that *does* carry topics,
+though, moving it to the leftovers shelf is a real instruction and is stored as
+one — otherwise the row would slide over, the counts would change, and the next
+load would put it straight back where its topics say it belongs. And like your notes, overrides are yours
+rather than the cache's: *rescan* and *clear topic cache* leave them strictly
+alone, for the same reason — no request re-derives one.
+
+The menu lists only shelves that already exist. Inventing a shelf is what the
+suggestions are for, and an override naming a shelf nothing draws would put the
+row somewhere the page cannot show it.
+
 ### Shelf identity — a colour and a glyph
 
 Every shelf gets a hue and a shape, so eight shelves are one glance instead of
@@ -130,8 +221,22 @@ renaming a shelf gives it a new one — both stated in the charter, and both
 cheaper than a settings key that would need a default, a migration and an answer
 for a renamed shelf.
 
-Two channels carry the same slot, so **either one alone identifies a shelf**:
-a reader who cannot separate two of the hues still has twelve distinct shapes.
+There are twelve hues and twelve glyphs, and they are walked **independently**.
+Up to twelve shelves, either channel alone identifies one: twelve distinct
+colours *and* twelve distinct shapes, so a reader who cannot separate two of the
+hues still has the shapes. Above twelve, the identity is the **pair** — 144 of
+them — and one of the two channels necessarily repeats, because there are only
+twelve colours. Two shelves may then share a hue, and the glyph is what tells
+them apart. That is the two channels degrading one at a time, which is what a
+second channel is for.
+
+It is worth stating because the opposite shipped: one slot used to drive both
+channels, so the thirteenth shelf wrapped and got a duplicate hue **and** glyph
+together — both channels failing at once, which is the one thing the design
+exists to prevent. Twelve shelves is not a corner case either; auto-grouping
+makes one shelf per distinct topic, and accepting a suggestion makes a
+thirteenth a single click.
+
 The leftovers shelf stays deliberately outside the palette — it is a remainder,
 not an idea.
 
@@ -149,7 +254,9 @@ Press **audit** in the toolbar. It opens one panel with two sections, because
 they are two questions about one collection: what is wrong with your **topics**,
 and what is missing from your **repositories**.
 
-#### Topics GitHub will show you one repo's topics, and
+#### Topics
+
+GitHub will show you one repo's topics, and
 it will show you every repo carrying one topic — but nothing anywhere shows you
 your labelling vocabulary *as a whole*, which is exactly why it rots: every
 individual decision looked fine.
@@ -306,6 +413,15 @@ account, six hundred authenticated requests for one click on a link. The source
 line lists the rungs that answered and ends `· not yours`, so the narrowing is
 visible rather than assumed.
 
+**The three first-day verbs stand down there too**, and for a sharper reason:
+they write *your* setup. A suggestion accepted on somebody else's page would put
+their topics into your `groups` — synced, on every machine — and pin their repos
+in your store; and because the first entry in `groups` turns auto-grouping off,
+your own profile would then draw one shelf with everything in it. So on a
+profile that is not yours there is no suggestions strip, no walk and no grip.
+The reading half is untouched: the page is still shelved, still searchable and
+still audited.
+
 ### When GitHub's page moves
 
 The repo page will be restructured eventually, and today that failure would be
@@ -368,12 +484,12 @@ repository you own, one at a time.
 ```
 cd tests
 npm install                     # jsdom, once — the extension itself has no dependencies
-node harness.js                 # all 25 scenarios
+node harness.js                 # all 30 scenarios
 node harness.js ladder-floor    # just that one
 node harness.js facts find      # two of them
 ```
 
-Twenty-five scenarios drive the real content scripts and the real service
+Thirty scenarios drive the real content scripts and the real service
 worker against a jsdom GitHub.
 
 **Name a scenario by keyword, never by number.** A number is an index and it
@@ -404,11 +520,24 @@ release too long — by the end its row 17 said `identity` while scenario 17 was
 - `facts` — one page read yields ten fields, topics still sidebar-scoped
 - `find` — description, README, topic and language are all searchable
 - `note` — written, painted, searchable — and survives a rescan
+- `override` — the reader's own answer outranks every topic, shelves a repo with
+  none at all, survives a rescan, and costs one write and no reload per move
+- `suggest` — a cold start offers shelves rather than one dump: the prefix is
+  named for what the repos share, a blanket label is not offered, a topic
+  already on the page is not offered, accepting pins the repos a name cannot
+  match, and the shelves already on screen survive the write
+- `workbench` — the leftovers shelf counts the untagged from the topics, opens
+  one tab per press, wraps past the last one, and never toggles the shelf
+- `not yours` — on somebody else's profile the page is still shelved, still
+  searchable and still audited, and every verb that would write the reader's
+  own setup is simply not drawn
 - `vocabulary` — families, suspicions, blanket labels and singletons, each drawn
   as what it is, and 3 000 topics in milliseconds
 - `audit` — gaps denominated per field per source; a finding filters to its own
   repos
 - `mark` — the shelf's mark on a repo page, with its note, at zero requests
+- `mark follows` — a repo you pinned by hand wears the shelf you put it on,
+  in that shelf's colour, on its own page
 - `degrades` — no shelf map means no colour — never a wrong one
 - `warm` — off by default, stalest first, bounded, stops on 429, never discovers
 - `canary` — a moved selector is named; four pages is below the floor
@@ -420,7 +549,9 @@ release too long — by the end its row 17 said `identity` while scenario 17 was
 - `forgets` — the fact cache is pruned by age and capped by count, newest kept
 - `packaging` — one permission, two hosts, the excluded routes, the licence, and
   a storage claim that matches the code
-- `identity` — a distinct hue and glyph per shelf, stable under any drawing order
+- `identity` — a distinct hue and glyph per shelf, stable under any drawing
+  order; above twelve the hue+glyph *pair* stays distinct to 144, and the two
+  channels never repeat together
 
 Two of those are phrases and need quoting, because the two token scenarios are
 told apart by one word: `node harness.js "with token"`. Two more deliberately
@@ -471,11 +602,12 @@ shelves/
 │   ├── options.html/.js    shelf editor, token, behaviour
 │   ├── icons/              generated by tools/make_icons.py
 │   └── src/
-│       ├── store.js        settings · token · fact cache · notes · collapse
+│       ├── store.js        settings · token · fact cache · notes · overrides ·
+│       │                   the one write to groups · collapse · the bench
 │       ├── dom.js          route detection, list finding, page merging
 │       ├── facts.js        ONE parse of a repo page → ten fields
 │       ├── topics.js       the four-rung topic ladder; rung 1 is a floor
-│       ├── vocab.js        the topics as a system, and the panel kit
+│       ├── vocab.js        the topics as a system, suggested shelves, the panel
 │       ├── audit.js        the repos as a system: what is missing
 │       ├── view.js         bucketing, rendering, shelf identity
 │       ├── mark.js         route 2 — the mark on a repo's own page
@@ -484,7 +616,7 @@ shelves/
 │       └── shelves.css     themed off GitHub's own CSS variables
 ├── tests/
 │   ├── world.js            fake GitHub: jsdom + chrome stub + real worker in a vm
-│   ├── harness.js          the 25 scenarios, selected by keyword
+│   ├── harness.js          the 30 scenarios, selected by keyword
 │   └── package.json        jsdom, dev only
 └── tools/make_icons.py     regenerates the icons from source
 ```
@@ -502,19 +634,31 @@ In your browser profile, unencrypted, via `chrome.storage.local`:
 - **the fact cache** — for every repo including private ones: name, description,
   language, stars, forks, licence, homepage, last-touched, and the README's
   first 400 characters
-- **your notes** — the one thing here that nothing can rebuild
+- **your notes** — one of the two things here that nothing can rebuild
+- **your overrides** (`overrides`) — the repos you put on a shelf by hand,
+  keyed `owner/name`. The other thing nothing can rebuild
 - **the shelf map** — your shelf names, their counts, and your repo names
 - **the token**, if you added one — `local` and never `sync`, so it does not
   travel between machines
 
+Your shelf list itself — including any suggestion you accepted — is your
+configuration and lives in `chrome.storage.sync`, with the rest of the options.
+
 Entries are pruned once they have been untouched for four cache lifetimes (at
 least 90 days), and the cache is capped at 3 000 repos. **Clear topic cache** in
-options empties it now; your notes are never touched by it.
+options empties it now; your notes and your overrides are never touched by it.
 
-One thing is kept outside all of that: pressing `read N more` writes a single
-flag to `sessionStorage`, which the next load reads and deletes. It is not a
-setting — it is a decision about this tab, taken once — so it never syncs and a
-reload cannot silently repeat a large read you authorised once.
+Two smaller things sit outside all of that, in this browser's own storage for
+github.com rather than in the extension's:
+
+- `shelves:open:<owner>` and `shelves:bench:<owner>` in `localStorage` — which
+  shelves you left open, and how far through the untagged repos the workbench
+  has walked. Both are places rather than decisions: losing either costs you one
+  scroll or one repeat of a tab you already closed
+- pressing `read N more` writes a single flag to `sessionStorage`, which the next
+  load reads and deletes. It is not a setting — it is a decision about this tab,
+  taken once — so it never syncs and a reload cannot silently repeat a large read
+  you authorised once
 
 None of this ever leaves the browser — but anyone who can read your browser
 profile can read all of it, including private repository names and whatever you
@@ -531,9 +675,12 @@ a choice. Worth knowing before installing on a shared machine.
   A field that cannot be read is absent, never wrong — but until someone drives
   `facts.js` against a real logged-in repo page (a milestone on the roadmap),
   treat a blank star count as "not verified yet" rather than "no stars".
-- **Topics only.** Not language, not stars, not last-pushed — those are filters
-  GitHub already ships.
-- **A repo appears on exactly one shelf.** First match wins.
+- **Topics only, as the axis.** Not language, not stars, not last-pushed —
+  those are filters GitHub already ships. A language or a shared name *is*
+  offered once, as a suggestion, and what it builds is an ordinary shelf holding
+  pinned repos — configuration rather than a second axis.
+- **A repo appears on exactly one shelf.** First match wins, and an override
+  wins before that.
 - **Above ~600 repos** the API path stops paginating; the page path still works.
 - **Rung 4 reads at most 100 repositories in a pass** (`scrapeMax`). The rest
   are counted on a `read N more` button rather than fetched, and the button
@@ -551,13 +698,15 @@ a choice. Worth knowing before installing on a shared machine.
 | the source line names several rungs, `via page + api (public) + repo pages` | that is normal. It lists every rung that contributed, in the order it was climbed; one name would hide the requests that answered most of the collection |
 | `read N more` in the toolbar | rung 4 stopped at 100 repos. Press it to read the rest — one request each, once, and they are cached afterwards. Nothing went wrong |
 | `token rejected (401)` | the token expired or was revoked; clear the field or make a new one. The run has already re-asked the public API without it, so the page is still shelved |
-| everything in Ungrouped | the repos have no topics yet, or your shelf names do not match any topic |
+| everything in Ungrouped | the repos have no topics yet, or your shelf names do not match any topic. Take the suggestions above the shelves, walk the untagged ones with `N untagged · tag them`, or move a row by hand with its `⠿` grip |
+| a repo sits on a shelf none of its topics name | you moved it there yourself, or accepted a name-or-language suggestion that pinned it. An override outranks every topic — drag it back to the leftovers shelf and the override is deleted |
+| a suggestion offers a shelf you already have | it should not: a topic that is already a shelf, and any repo that already has one, are both excluded. If it happens the shelf label and the topic differ in more than case |
 | shelves do not appear at all | not on `?tab=repositories`, or GitHub changed its markup — see `src/dom.js` |
 | stale grouping after re-tagging | press **rescan** in the toolbar |
 | `/` does nothing | the cursor is in another field — `/` stands down inside inputs so it never steals a keystroke you meant for GitHub |
 | a note vanished | it was emptied; an empty note is deleted rather than stored blank. Nothing else removes one |
 | a shelf changed colour | you renamed it. The mark is a hash of the name, which is what lets it be the same on every machine with nothing stored |
-| two shelves look similar | they will still have different glyphs — the shape is the second channel and it never agrees with the wrong hue |
+| two shelves look similar | up to twelve shelves they cannot be: twelve distinct hues and twelve distinct glyphs. Past twelve, one of the two channels has to repeat — the *pair* is the identity, so if the colours look alike read the glyph, and if the shapes do read the colour |
 | the chip on a repo page has no colour | you are auto-grouping and have not opened your Repositories tab yet — the colour depends on the whole shelf list, so it declines to guess one |
 | no chip at all on a repo page | only the repo's landing page carries the About sidebar it sits in; sub-pages (issues, code, a file) do not |
 | the audit says "not asked" | those repos were answered by the GitHub API, whose body does not carry that field. A rescan without a token reads the pages themselves |
