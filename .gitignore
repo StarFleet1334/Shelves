@@ -12,3 +12,6 @@ tests/package-lock.json
 .claude/
 .greenhouse/proofs.json
 
+
+# build output — the store package is made, not kept
+dist/

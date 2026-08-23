@@ -417,7 +417,14 @@ globalThis.Shelves = globalThis.Shelves || {};
       note,
     ]
       .filter(Boolean)
-      .join("  ")
+      /* A separator no field can contain, so a substring query cannot
+       * span two of them -- "python rag" must not match a Python repo
+       * whose README mentions rag. WRITTEN AS AN ESCAPE, never as the
+       * byte itself: vocab.js already carries this reason beside its own
+       * separator, and this file had the literal, which is why git and
+       * grep called it binary and why `tools/package.py` refused to
+       * build a zip containing it. */
+      .join(" \u0001 ")
       .toLowerCase();
   };
 })(globalThis.Shelves);
