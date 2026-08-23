@@ -62,10 +62,76 @@ globalThis.Shelves = globalThis.Shelves || {};
      visible of the two wrongs and the one a reader would report as a bug. */
   const BOILER = /[\s.]*(Contribute to .+? development by creating an account on GitHub\.?|Create an account on GitHub.*)$/i;
 
+  /* ---- WHERE THE ABOUT PANEL IS, STRUCTURALLY -----------------------------
+   * `.Layout-sidebar, [data-testid="repository-sidebar"]` used to be the whole
+   * answer here, with `|| doc` behind it. mark.js measured that pair as dead
+   * on the live page and grew a structural finder; this file kept the pair and
+   * never got one, which mattered more, because `|| doc` does not fail — it
+   * SUCCEEDS WRONGLY. Unscoped, `topicsIn` reads every /topics/ link in the
+   * document, so a README full of them becomes the repo's tags (the scar this
+   * scoping exists for), and `license` and `homepage` are read off README
+   * badges. Three fabricated fields where P.XI promises absent ones.
+   *
+   * RE-MEASURED, on six real repo pages fetched and parsed exactly as
+   * `scrape()` parses them — the server's HTML through DOMParser, no scripts,
+   * no layout: the class pair matched 0 of 6, the structural finder matched
+   * 6 of 6 and scoped the topics correctly. The live canary said the same
+   * thing at scale in the same hour: "read 50 pages, found the About sidebar
+   * on 0". Both documents agree, which is the fact nobody had written down —
+   * mark.js reads the hydrated DOM and this file reads the server's response,
+   * and the selector strategy turns on whether they differ. They do not.
+   *
+   * Climb from the "About" heading until an ancestor also holds one of the
+   * sidebar's other landmarks. Bounded so an unbounded climb cannot end at
+   * <body>: never an ancestor containing the repo's <h1>, and — only where
+   * layout reports a width at all, so a parsed document is not fenced out —
+   * never something as wide as half the window. */
+  const LANDMARK =
+    /^(releases?|packages?|languages?|contributors?|deployments?|environments?|used by)$/i;
+
+  function heading(doc, re) {
+    return [...doc.querySelectorAll("h2, h3")].filter((h) =>
+      re.test(String(h.textContent || "").trim())
+    );
+  }
+
+  S.sidebarOf = function sidebarOf(doc) {
+    /* The class stays as a FAST PATH: when it is right it is right, and it
+     * costs one selector to find out. */
+    const named = doc.querySelector(
+      '.Layout-sidebar, [data-testid="repository-sidebar"]'
+    );
+    if (named) return named;
+
+    const about = heading(doc, /^about$/i)[0];
+    if (!about) return null;
+    const others = heading(doc, LANDMARK);
+    const h1 = doc.querySelector("h1");
+    const win = doc.defaultView;
+    const room = win && win.innerWidth ? win.innerWidth : 0;
+
+    let el = about.parentElement;
+    for (let i = 0; el && i < 8; i++, el = el.parentElement) {
+      if (h1 && el.contains(h1)) return null;          // climbed out of the column
+      const w = el.getBoundingClientRect ? el.getBoundingClientRect().width : 0;
+      if (room && w > room * 0.5) return null;         // that is the page, not a column
+      const anchored =
+        others.some((o) => el.contains(o)) ||
+        !!el.querySelector('a[href^="/topics/"]');
+      if (anchored) return el;
+    }
+    return null;
+  };
+
   S.factsFrom = function factsFrom(doc, fullName) {
-    const nest =
-      doc.querySelector('.Layout-sidebar, [data-testid="repository-sidebar"]');
-    const sidebar = nest || doc;
+    const nest = S.sidebarOf(doc);
+    /* NO `|| doc`. With no sidebar found, the three fields that live in it are
+     * ABSENT — which is what P.XI asks for and what the canary below can then
+     * report. Falling back to the whole document turned a selector failure
+     * into invented data, and invented data is the one failure this file's
+     * canary cannot see, because a fabricated field looks exactly like a
+     * found one. */
+    const sidebar = nest || doc.createElement("div");
     const f = {
       name: String(fullName || "").toLowerCase(),
       via: "page",

@@ -10,6 +10,15 @@ globalThis.Shelves = globalThis.Shelves || {};
 
   let busy = false;
 
+  /* READ THE REST — the scrape ceiling lifted for exactly one pass.
+   *
+   * It rides sessionStorage and not settings because it is NOT a setting: it
+   * is a decision about this page, taken once, and it must not outlive the
+   * tab or follow the reader to another machine over sync. It is cleared as
+   * it is read, so a reload cannot silently repeat a 400-request pass the
+   * reader authorised once. */
+  const READ_ALL = "shelves:read-all";
+
   async function run() {
     if (busy) return;                                   // re-entrancy
     if (!S.isRepoTab()) return;                         // wrong route
@@ -26,6 +35,15 @@ globalThis.Shelves = globalThis.Shelves || {};
       sourceUl.parentNode.insertBefore(status, sourceUl);
 
       const settings = await S.load();
+      try {
+        if (sessionStorage.getItem(READ_ALL) === "1") {
+          sessionStorage.removeItem(READ_ALL);
+          settings.readAll = true;
+        }
+      } catch (e) {
+        /* storage denied — the ceiling simply stays on, which is the safe way
+         * for this particular failure to land (P.III). */
+      }
       const owner = S.owner();
 
       let rows = S.rowsOf(sourceUl);
@@ -42,7 +60,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         ? "reading topics from the API…"
         : "reading topics…";
 
-      const { topics, facts, source, warning, health } = await S.resolve(
+      const { topics, facts, source, warning, health, deferred } = await S.resolve(
         rows,
         names,
         settings,
@@ -59,9 +77,25 @@ globalThis.Shelves = globalThis.Shelves || {};
 
       const host = S.render({
         rows, topics, facts, names, notes, settings, sourceUl, source, warning,
-        health, owner,
+        health, owner, deferred,
         handlers: {
           reload: () => location.reload(),
+          /* THE ONLY VERB HERE THAT DELIBERATELY SPENDS REQUESTS. It reloads
+           * rather than re-entering run(), for the same reason rescan does:
+           * the pass is the product of the page, and the cache means the
+           * second one re-reads none of what the first already got. */
+          more: () => {
+            try {
+              sessionStorage.setItem(READ_ALL, "1");
+            } catch (e) {
+              /* Without the flag the reload would repeat the same bounded
+               * pass and look like the button does nothing. Better to not
+               * move at all than to spend a page load saying nothing. */
+              console.warn("[shelves] cannot ask for the rest — storage denied", e);
+              return;
+            }
+            location.reload();
+          },
           rescan: async () => {
             await S.cache.clear();
             location.reload();

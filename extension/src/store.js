@@ -29,6 +29,18 @@ globalThis.Shelves = globalThis.Shelves || {};
      * opt-in even though it is the single biggest improvement to a cold run. */
     prewarm: false,
     warmBatch: 6,          // repo pages per visit, at concurrency 1
+    /* THE CEILING ON THE HIGHEST-VOLUME PATH. Rung 4 reads one page per repo
+     * and, until this existed, read as many as it was handed — so an account
+     * the API cannot see is 400 authenticated fetches nobody chose. The point
+     * is not to read less; it is to make reading a lot a DECISION. Above this
+     * many, the run reads this many, says how many are left, and offers to
+     * read the rest (view.js's `read N more`).
+     *
+     * 100 because it is far above what a normal account ever reaches through
+     * rung 4 — the API answers every public repo in one request, so what
+     * reaches here is usually just the private tail — and far below the
+     * number at which a page load becomes a network event. */
+    scrapeMax: 100,
   };
 
   const CACHE_KEY = "topicCache";   // what the fact cache used to be called

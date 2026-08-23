@@ -68,34 +68,13 @@ globalThis.Shelves = globalThis.Shelves || {};
    *     column, so the climb has left the sidebar.
    *   - if layout reports a width at all, a column is not most of the window.
    *     Gated on `> 0` so a harness with no layout engine is not fenced out. */
-  const LANDMARK = /^(releases?|packages?|languages?|contributors?|deployments?|environments?|used by)$/i;
-
-  function heading(doc, re) {
-    return [...doc.querySelectorAll("h2, h3")].filter((h) =>
-      re.test(String(h.textContent || "").trim())
-    );
-  }
-
-  function sidebarOf(doc) {
-    const about = heading(doc, /^about$/i)[0];
-    if (!about) return null;
-    const others = heading(doc, LANDMARK);
-    const h1 = doc.querySelector("h1");
-    const win = doc.defaultView;
-    const room = win && win.innerWidth ? win.innerWidth : 0;
-
-    let el = about.parentElement;
-    for (let i = 0; el && i < 8; i++, el = el.parentElement) {
-      if (h1 && el.contains(h1)) return null;          // climbed out of the column
-      const w = el.getBoundingClientRect ? el.getBoundingClientRect().width : 0;
-      if (room && w > room * 0.5) return null;         // that is the page, not a column
-      const anchored =
-        others.some((o) => el.contains(o)) ||
-        !!el.querySelector('a[href^="/topics/"]');
-      if (anchored) return el;
-    }
-    return null;
-  }
+  /* ONE FINDER, AND IT LIVES IN facts.js. This file grew the structural climb
+   * first and kept it private; facts.js then needed the identical thing for
+   * the identical reason, and two copies of "where is the About panel" is two
+   * answers waiting to disagree — which is the precise failure the chip exists
+   * to prevent. The climb, its two bounds and the measurements behind it now
+   * sit beside the parse that leans on it hardest. */
+  const sidebarOf = (doc) => S.sidebarOf(doc);
 
   function berth(doc) {
     const named = doc.querySelector(
@@ -220,10 +199,15 @@ globalThis.Shelves = globalThis.Shelves || {};
     /* The topics are ON THIS PAGE, in the sidebar, scoped exactly as facts.js
      * scopes them — so a README full of /topics/ links cannot lie about which
      * shelf this repo is on. Free, and more current than the cache. */
-    const side = document.querySelector(
-      '.Layout-sidebar, [data-testid="repository-sidebar"]'
-    );
-    let topics = S.topicsIn(side || document);
+    const side = S.sidebarOf(document);
+    /* NO `|| document`. This line kept the dead class pair three functions
+     * below a working structural finder, with the whole page behind it — so
+     * the chip whose entire rationale is "a mark that disagrees with the
+     * shelves is worse than no mark" could name a shelf derived from the
+     * README's /topics/ links. Measured the day it was fixed: the pair matched
+     * 0 of 6 real repo pages and 0 of 50 on a live run. With no sidebar there
+     * are no topics here, and the cache below answers instead. */
+    let topics = side ? S.topicsIn(side) : [];
     if (!topics.length) {
       const cached = (await S.cache.read())[name];
       if (cached && Array.isArray(cached.topics)) topics = cached.topics;

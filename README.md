@@ -17,8 +17,8 @@ your repos have no description, no README or no licence.
 
 It no longer lives on one page. Open a repo and it wears its shelf's mark, in the
 shelf's colour, with your private note — and if you let it, it quietly keeps its
-cache warm while you are elsewhere on GitHub so you never wait fifteen seconds
-for a cold read again.
+cache warm while you are elsewhere on GitHub so you never wait out a cold read
+again.
 
 It is a lens, not an editor. It never writes to your GitHub account, and it
 talks to exactly two hosts — `github.com` and `api.github.com`. Nothing it
@@ -30,7 +30,7 @@ unencrypted, in your browser profile). Worth reading before you install it on a
 shared machine.
 
 ```
-┌ expand all · collapse all · flat list · rescan · audit 9 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via repo pages ┐
+┌ expand all · collapse all · flat list · rescan · audit 9 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via page + api (public) + repo pages ┐
 
 ▾ aiproject                                                                                         12
     chat-agent          Python  ★2   Updated 2 days ago      Private
@@ -63,9 +63,12 @@ loads.
    project — *not* the project root.
 4. Go to `https://github.com/<your-username>?tab=repositories` and reload.
 
-The first load shows a progress line — `reading topics from repo pages 34/76 —
-cached after this` — for roughly ten to twenty seconds. Every load after that
-is instant.
+The first load asks the GitHub API once, and one request answers every public
+repository you own. Only what it cannot see — your private repos — is read a
+page at a time, behind a progress line: `reading topics from repo pages 34/76 —
+cached after this`. On the 77-repo account this was last measured against that
+came to **one API call and no repo-page reads at all**; an account that is
+mostly private is ten to twenty seconds. Every load after that is instant.
 
 ### Tag some repos first
 
@@ -85,7 +88,9 @@ options*):
 - **Private repositories** — nothing to do. It works with no token; see below
   if you want it faster.
 - **Behaviour** — start collapsed, how long to remember topics, what to call
-  the leftovers shelf.
+  the leftovers shelf. Concurrency, page depth and the rung-4 ceiling
+  (`scrapeMax`, 100) are defaults in `src/store.js` and are not on this page
+  yet; the ceiling has a button on the toolbar instead.
 
 ### Find anything (`/`)
 
@@ -193,6 +198,13 @@ silently narrowing the denominator. This is principle XIII in the charter, and
 it is there because an audit that quietly over-reports looks exactly like one
 that works.
 
+The caveat shrinks as the ladder climbs. A repo answered by page chips alone
+carries three fields and can be asked about nothing else, so a run that stopped
+at rung 1 could only report *not asked* about the whole collection: on the
+77-repo account, making rung 1 a floor moved that line from **readme, licence
+and description** to **readme alone**, and three real gaps appeared underneath
+it that had been invisible.
+
 ### The mark on a repo's own page
 
 Open any of your repositories and a chip sits at the top of the About sidebar:
@@ -214,10 +226,53 @@ shelves, and you are auto-grouping) the chip still names the shelf and simply
 **declines to claim a colour**. A mark that disagrees with the shelves would be
 worse than no mark.
 
+### Where the topics come from
+
+Four rungs, climbed from free to expensive, stopping the moment every repo is
+answered:
+
+1. **the topic chips already in the page** — free, no request
+2. **`api.github.com` with your token** — one request per 100 repos, sees private
+3. **`api.github.com` without one** — the same cost, public repos only
+4. **each remaining repo's own page** — one request each, sees private
+
+**Rung 1 is a floor, not an answer.** GitHub renders chips on some rows and not
+others — 9 of 77 on the account this was re-measured against — so what the page
+gives up for free is kept, and every repo it did not name still climbs. Until
+2026-08-23 one chipped row ended the ladder for the whole collection: 68 repos
+in Ungrouped, zero requests, nothing on the toolbar to say anyone had been
+skipped, and no descriptions, READMEs, languages or licences for `/` to search,
+because a chip is three fields and a repo page is ten.
+
+So the source line is a **list of the rungs that contributed**, not one name:
+
+```
+via page
+via api (token)
+via page + api (public)
+via api (public) + repo pages (cached)
+via page + api (public) + repo pages
+```
+
+One name was enough while a run could only ever be one rung. With chips as a
+floor a render is routinely two or three, and naming only the first would hide
+the requests that answered most of the collection.
+
+**Rung 4 has a ceiling.** It reads at most `scrapeMax` repositories in a pass —
+100 by default, and a default rather than an option, because the options page
+does not expose it yet — and the toolbar then grows a `read N more` button that
+lifts the ceiling for exactly one pass. Everything the first pass read is
+cached, so continuing costs only the repos that were deferred.
+
+A deferred repo is **not** counted among the `N unread`: unread means we tried
+and failed, and its cure is *rescan*. And it is not drawn as a warning, because
+nothing went wrong — a limit you can lift is a choice offered, and filing it
+beside `token rejected` would teach you to read a choice as a fault.
+
 ### Keeping the cache warm (off by default)
 
-A first run with an empty cache is fifteen seconds of fetching, and the cache
-expires, so it comes back every week. Turn on **Keep the cache warm in the
+A first run that reaches rung 4 is ten to twenty seconds of fetching, and the
+cache expires, so it comes back every week. Turn on **Keep the cache warm in the
 background** in options and SHELVES refreshes the stalest few entries while you
 are elsewhere on github.com.
 
@@ -247,8 +302,9 @@ That is a deliberate narrowing, not a limitation. Your token answers *"what are
 **my** repositories"*, which tells you nothing about somebody else's page — so
 sending it there spends a credential on a request that cannot use it. And rung 4
 would fetch every one of their repos with your session cookie: on a 600-repo
-account, six hundred authenticated requests for one click on a link. The toolbar
-says `· not yours` so you can see which rungs answered.
+account, six hundred authenticated requests for one click on a link. The source
+line lists the rungs that answered and ends `· not yours`, so the narrowing is
+visible rather than assumed.
 
 ### When GitHub's page moves
 
@@ -261,21 +317,29 @@ So each parse records which **anchors** it could find, separately from what they
 said. If most of a run's pages come back without them, the toolbar says so:
 
 ```
-76 repos · 1 shelf · 0 tagged · via repo pages · GitHub's repo page changed
-shape — shelving is unreliable: read 41 pages, found the About sidebar on 0
+76 repos · 1 shelf · 0 tagged · via api (public) + repo pages · GitHub's repo
+page changed shape — shelving is unreliable: read 41 pages, found the About
+sidebar on 0
 ```
 
 Below five pages read there is deliberately **no opinion** — at that sample a run
 of genuinely sparse repos is indistinguishable from a dead selector, and a canary
 that cries wolf is turned off within a week.
 
+It can only ever speak about pages rung 4 actually read, which is a second
+reason rung 1 had to become a floor: a run that stopped at the chips read no
+page at all, so the run that would have noticed the sidebar moving was the run
+that never happened.
+
 ### The optional token
 
 Without a token, private repos' topics are read from your own repo pages using
-the session you are already signed in with — one request per repo, cached for a
-week. That is the default and it is correct; the token only makes it faster.
+the session you are already signed in with — one request per repo, up to the
+ceiling, cached for a week. That is the default and it is correct; the token
+only makes it faster.
 
-With one, a single API call answers everything:
+With one, a single API call answers everything, private repos included, and the
+toolbar reads `via api (token)`:
 
 1. [github.com/settings/tokens?type=beta](https://github.com/settings/tokens?type=beta) → **Generate new token**
 2. Repository access: **All repositories**
@@ -288,39 +352,80 @@ a line of your code and cannot write anything at all. It is stored in
 `chrome.storage.local` — never in synced storage, so it does not travel to your
 other machines — and is sent to `api.github.com` and nowhere else.
 
+**A rejected token falls back to a request, not to a label.** If it has expired
+or been revoked, the toolbar says `token rejected (401)` and the run *re-asks
+the public endpoint without the credential* before anything else — so the line
+reads `via api (public) + repo pages`, and only what the public API genuinely
+cannot see reaches rung 4. That branch used to set the label and skip the
+request: it named a rung that had not run, and every repo fell through as
+missing, which turned one dead credential into a page that read every
+repository you own, one at a time.
+
 ---
 
 ## Running the tests
 
 ```
 cd tests
-npm install        # jsdom, once — the extension itself has no dependencies
-node harness.js    # all seven scenarios
-node harness.js 3  # just scenario 3
+npm install                     # jsdom, once — the extension itself has no dependencies
+node harness.js                 # all 25 scenarios
+node harness.js ladder-floor    # just that one
+node harness.js facts find      # two of them
 ```
 
-Seven scenarios drive the real content scripts and the real service worker
-against a jsdom GitHub:
+Twenty-five scenarios drive the real content scripts and the real service
+worker against a jsdom GitHub.
 
-| # | Scenario | Proves |
-|---|----------|--------|
-| 1 | chips already on the page | free path works, costs no network |
-| 2 | no chips, no token | private repos resolve by page scraping |
-| 3 | no chips, with token | one authenticated call, zero scraping |
-| 4 | pagination | page-2 repos are shelved, pager hidden |
-| 5 | idempotence | a second pass makes no second host, no nesting |
-| 6 | warm cache | zero repo-page fetches, and the toolbar says *cached* |
-| 7 | token rejected (401) | says so, falls through, still renders |
-| 8 | facts | one page read yields ten fields, topics still sidebar-scoped |
-| 9 | find | description, README, topic and language are all searchable |
-| 10 | note | written, painted, searchable — and survives a rescan |
-| 11 | vocabulary | families, suspicions, blanket labels and singletons, each drawn as what it is |
-| 12 | audit | gaps denominated per field per source; a finding filters to its own repos |
-| 13 | mark | the shelf's mark on a repo page, with its note, at zero requests |
-| 14 | mark degrades | no shelf map means no colour — never a wrong one |
-| 15 | warm | off by default, stalest first, bounded, stops on 429, never discovers |
-| 16 | canary | a moved selector is named; four pages is below the floor |
-| 17 | identity | a distinct hue and glyph per shelf, stable under any drawing order |
+**Name a scenario by keyword, never by number.** A number is an index and it
+moves: scenarios were appended, `harness.js 8` stopped meaning the ladder and
+started meaning `facts` — which passes, so a milestone whose proof was a number
+would have ticked itself. `harness.js ladder-floor` still means what it meant.
+A keyword matches as a substring of the scenario's own name, and a selector that
+matches nothing **fails** rather than passing emptily. Roadmap proofs are
+written this way for the same reason, and this list was a numbered table for one
+release too long — by the end its row 17 said `identity` while scenario 17 was
+`credentials`.
+
+- `network` — every row carries chips, the page alone is the whole answer, and
+  it costs no network
+- `ladder-floor` — chips are a floor: the repos they did not name still climb to
+  the API and the repo pages, and the API never overwrites a chip answer
+- `ceiling` — rung 4 stops at `scrapeMax`, says how many are left, and the
+  continue reads exactly those and re-reads none of the rest
+- `token-fallback` — a dead token re-asks the *public* API instead of reading
+  every repo page one at a time
+- `"no token"` — private repos resolve by page scraping, with no credential
+  anywhere
+- `"with token"` — one authenticated call, zero scraping
+- `pagination` — page-2 repos are shelved, pager hidden
+- `idempotence` — a second pass makes no second host, no nesting
+- `"warm cache"` — zero repo-page fetches, and the toolbar says *cached*
+- `rejected` — a 401 is said out loud, and the page still renders
+- `facts` — one page read yields ten fields, topics still sidebar-scoped
+- `find` — description, README, topic and language are all searchable
+- `note` — written, painted, searchable — and survives a rescan
+- `vocabulary` — families, suspicions, blanket labels and singletons, each drawn
+  as what it is, and 3 000 topics in milliseconds
+- `audit` — gaps denominated per field per source; a finding filters to its own
+  repos
+- `mark` — the shelf's mark on a repo page, with its note, at zero requests
+- `degrades` — no shelf map means no colour — never a wrong one
+- `warm` — off by default, stalest first, bounded, stops on 429, never discovers
+- `canary` — a moved selector is named; four pages is below the floor
+- `credentials` — a stranger's profile costs no token, no scrapes and no cache
+  writes, and is still shelved
+- `backoff` — GitHub says stop, the run stops, and the toolbar counts the unread
+  and names the cure
+- `untrusted` — a page-supplied href is not a URL to fetch
+- `forgets` — the fact cache is pruned by age and capped by count, newest kept
+- `packaging` — one permission, two hosts, the excluded routes, the licence, and
+  a storage claim that matches the code
+- `identity` — a distinct hue and glyph per shelf, stable under any drawing order
+
+Two of those are phrases and need quoting, because the two token scenarios are
+told apart by one word: `node harness.js "with token"`. Two more deliberately
+overlap — `mark` runs `degrades` with it, `warm` runs `"warm cache"` with it —
+which is a name covering both, where a number would have been a guess.
 
 Several things in there are **not** checkable without a browser, and every one
 of them shipped wrong once: `tests/row-layout.html` measures the note margin
@@ -347,11 +452,6 @@ error blankslate into a 145px column — 47 rows at 1 416px each, which reads as
 blank because nothing in it is legible at that width. Measured signed out, the
 same page is clean. The test now says so when it is run without a session.
 
-Scenarios can be named as well as numbered — `node harness.js facts find` —
-and a selector that matches nothing **fails**. Roadmap proofs use keywords for
-that reason: a number is an index and moves the moment a scenario is inserted
-above it.
-
 Assertions are on counts and membership, never on "it did not throw".
 
 **The harness cannot judge layout or event semantics.** After a change that
@@ -374,7 +474,7 @@ shelves/
 │       ├── store.js        settings · token · fact cache · notes · collapse
 │       ├── dom.js          route detection, list finding, page merging
 │       ├── facts.js        ONE parse of a repo page → ten fields
-│       ├── topics.js       the four-rung topic ladder
+│       ├── topics.js       the four-rung topic ladder; rung 1 is a floor
 │       ├── vocab.js        the topics as a system, and the panel kit
 │       ├── audit.js        the repos as a system: what is missing
 │       ├── view.js         bucketing, rendering, shelf identity
@@ -384,7 +484,7 @@ shelves/
 │       └── shelves.css     themed off GitHub's own CSS variables
 ├── tests/
 │   ├── world.js            fake GitHub: jsdom + chrome stub + real worker in a vm
-│   ├── harness.js          the seven scenarios
+│   ├── harness.js          the 25 scenarios, selected by keyword
 │   └── package.json        jsdom, dev only
 └── tools/make_icons.py     regenerates the icons from source
 ```
@@ -411,6 +511,11 @@ Entries are pruned once they have been untouched for four cache lifetimes (at
 least 90 days), and the cache is capped at 3 000 repos. **Clear topic cache** in
 options empties it now; your notes are never touched by it.
 
+One thing is kept outside all of that: pressing `read N more` writes a single
+flag to `sessionStorage`, which the next load reads and deletes. It is not a
+setting — it is a decision about this tab, taken once — so it never syncs and a
+reload cannot silently repeat a large read you authorised once.
+
 None of this ever leaves the browser — but anyone who can read your browser
 profile can read all of it, including private repository names and whatever you
 wrote in your notes. MV3 has no encrypted store, so that is inherent rather than
@@ -430,6 +535,10 @@ a choice. Worth knowing before installing on a shared machine.
   GitHub already ships.
 - **A repo appears on exactly one shelf.** First match wins.
 - **Above ~600 repos** the API path stops paginating; the page path still works.
+- **Rung 4 reads at most 100 repositories in a pass** (`scrapeMax`). The rest
+  are counted on a `read N more` button rather than fetched, and the button
+  lifts the ceiling for one pass. It is a default in `src/store.js`; the options
+  page does not expose it yet.
 - GitHub occasionally restructures the profile page. If shelves stop appearing,
   the selectors in `src/dom.js` are the single place to look — that is why they
   live in one file.
@@ -438,8 +547,10 @@ a choice. Worth knowing before installing on a shared machine.
 
 | What you see | What it means |
 |---|---|
-| toolbar says `via api (public)` and most repos are Ungrouped | private topics were not read — check that page scraping is not blocked, or add a token |
-| `token rejected (401)` | the token expired or was revoked; clear the field or make a new one |
+| the source line ends at `via api (public)` and most repos are Ungrouped | rung 4 never ran — private topics were not read. Check that page scraping is not blocked, or add a token |
+| the source line names several rungs, `via page + api (public) + repo pages` | that is normal. It lists every rung that contributed, in the order it was climbed; one name would hide the requests that answered most of the collection |
+| `read N more` in the toolbar | rung 4 stopped at 100 repos. Press it to read the rest — one request each, once, and they are cached afterwards. Nothing went wrong |
+| `token rejected (401)` | the token expired or was revoked; clear the field or make a new one. The run has already re-asked the public API without it, so the page is still shelved |
 | everything in Ungrouped | the repos have no topics yet, or your shelf names do not match any topic |
 | shelves do not appear at all | not on `?tab=repositories`, or GitHub changed its markup — see `src/dom.js` |
 | stale grouping after re-tagging | press **rescan** in the toolbar |
@@ -451,5 +562,5 @@ a choice. Worth knowing before installing on a shared machine.
 | no chip at all on a repo page | only the repo's landing page carries the About sidebar it sits in; sub-pages (issues, code, a file) do not |
 | the audit says "not asked" | those repos were answered by the GitHub API, whose body does not carry that field. A rescan without a token reads the pages themselves |
 | the toolbar says `· not yours` | you are on someone else's profile; only the free rungs run there, on purpose |
-| the toolbar says `N unread` | GitHub refused some repo-page reads — often a rate limit. Press **rescan** in a few minutes |
+| the toolbar says `N unread` | GitHub refused some repo-page reads — often a rate limit. Press **rescan** in a few minutes. Repos the ceiling deferred are never counted here: they were not tried, and their cure is the button, not a rescan |
 | the toolbar says GitHub's page changed shape | it probably has. `facts.js` owns every repo-page selector; nothing else needs looking at |

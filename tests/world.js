@@ -41,7 +41,21 @@ function row(owner, name, topics) {
     `</div>` +
     (chips ? `<div class="topics">${chips}</div>` : "") +
     `</div>` +
-    `<div class="col-2 d-inline-block text-right"><button class="btn">Star</button></div>` +
+    /* THE STAR COLUMN CARRIES A GREAT DEAL OF TEXT NOBODY CAN SEE, and a
+       one-button fake could not show it. Signed in, GitHub ships the star
+       control's confirmation copy and its "add to a list" menu as ordinary
+       hidden DOM inside every row — which put `star`, `starred` and `list` at
+       77 OF 77 MATCHES in the find box on a real profile, invisible here
+       because the fixture was politer than the page. Same lesson as the
+       column above: shaped like the real row, not merely like enough. */
+    `<div class="col-2 d-inline-block text-right">` +
+    `<div class="js-toggler-container starring-container">` +
+    `<div class="starred BtnGroup" style="display:none">` +
+    `<button class="btn">Unstar</button><span>Starred</span></div>` +
+    `<div class="unstarred BtnGroup"><button class="btn">Star</button></div>` +
+    `<user-list-menu><div class="SelectPanel-emptyPanel">` +
+    `Sorry, something went wrong. Add this repository to a list. Lists` +
+    `</div></user-list-menu></div></div>` +
     `</li>`
   );
 }
@@ -197,6 +211,8 @@ function bootWorker(fetchImpl, counters) {
  *   repos       [{name, chips?, private?, topics?}] — page 1
  *   page2       [{...}] optional second page
  *   apiRepos    what the API answers with, or a number for an HTTP error
+ *   apiPublic   the same, for the UNAUTHENTICATED door only — so a run
+ *               can have a dead token and a working public endpoint
  *   settings    seed for chrome.storage.sync
  *   token       seed for chrome.storage.local
  *   cache       seed topic cache
@@ -237,14 +253,22 @@ function build(opts) {
 
   // What the API returns. A number means "fail with this status".
   const apiFetch = async (url) => {
-    if (typeof opts.apiRepos === "number") {
-      return { ok: false, status: opts.apiRepos, json: async () => ({}) };
+    const authed = url.includes("/user/repos");
+    /* TWO ENDPOINTS, TWO ANSWERS. `/user/repos` and `/users/{u}/repos` are
+     * different doors with different credentials, and until now the fixture
+     * could only give one reply to both — so the one case that matters most,
+     * "the token is dead but the public API is fine", could not be built at
+     * all. `apiPublic` is consulted only for the unauthenticated door; omit it
+     * and both doors answer `apiRepos` exactly as before. */
+    const spec = (!authed && opts.apiPublic !== undefined)
+      ? opts.apiPublic : opts.apiRepos;
+    if (typeof spec === "number") {
+      return { ok: false, status: spec, json: async () => ({}) };
     }
     // Deliberately explicit: read the page number from the LAST page= only.
     const m = url.match(/[?&]page=(\d+)$/);
     const page = m ? Number(m[1]) : 1;
-    const authed = url.includes("/user/repos");
-    const rows = page > 1 ? [] : (opts.apiRepos || []).filter((r) => authed || !r.private);
+    const rows = page > 1 ? [] : (spec || []).filter((r) => authed || !r.private);
     return {
       ok: true,
       status: 200,

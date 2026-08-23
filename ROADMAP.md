@@ -59,10 +59,10 @@ same and a fix nobody can re-run is a fix nobody can trust.
 
 ## The ladder must be honest
 
-- [ ] **LIVE, no longer latent.** the ladder answers PER REPO, not per page — chips found on some rows are a floor, and the repos they did not answer still climb to the API and the repo pages. Observed 2026-08-22: GitHub now renders chips in the profile list, so a 77-repo account resolved `via page` on 9 rows and left 68 in Ungrouped for zero requests `proof: node tests/harness.js ladder-floor`
+- [x] the ladder answers PER REPO, not per page — chips found on some rows are a floor, and the repos they did not answer still climb to the API and the repo pages. Observed 2026-08-22: GitHub now renders chips in the profile list, so a 77-repo account resolved `via page` on 9 rows and left 68 in Ungrouped for zero requests. Landed 2026-08-23: the gate is `fromChips >= asked`, the API result no longer overwrites a chip answer, and the source line became a LIST of the rungs that contributed. Re-measured against the live profile — `via page + api (public)`, one API call, zero page reads, and the audit's caveat fell from "readme, licence and description" to readme alone `proof: node tests/harness.js ladder-floor`
 - [x] a repo page that could not be read is SAID, not silently Ungrouped — the toolbar counts them (`3 unread`) and names rescan as the cure. Landed with the rate-limit backoff, because they are the same silence `proof: node tests/harness.js unread`
-- [ ] a rejected token falls back to the UNAUTHENTICATED api before scraping 76 pages, and the source line says which of the two answered `proof: node tests/harness.js token-fallback`
-- [ ] the scrape path has a ceiling and a *continue* — above `scrapeMax` repos it reads that many, says how many are left and offers to read the rest, so 400 untagged repos is a choice rather than 400 requests `proof: node tests/harness.js ceiling`
+- [x] a rejected token falls back to the UNAUTHENTICATED api before scraping 76 pages, and the source line says which of the two answered. It used to set the label and skip the request, so the line named a rung that had not run and every repo fell through as missing `proof: node tests/harness.js token-fallback`
+- [x] the scrape path has a ceiling and a *continue* — above `scrapeMax` repos it reads that many, says how many are left and offers to read the rest, so 400 untagged repos is a choice rather than 400 requests. The offer is a toolbar button (`read N more`) and not a warning, because nothing went wrong; the cache is what makes the second pass cost only the deferred ones `proof: node tests/harness.js ceiling`
 
 ## The first day — value before the user has tagged anything
 

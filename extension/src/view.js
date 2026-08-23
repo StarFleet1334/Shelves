@@ -188,6 +188,31 @@ globalThis.Shelves = globalThis.Shelves || {};
     return li;   // markup we do not recognise: the fallback is styled to wrap
   }
 
+  /* THE ROW'S TEXT IS THE TEXT COLUMN'S, NOT THE WHOLE <li>'s.
+   *
+   * `li.textContent` reads everything in the row including the half of it
+   * nobody can see. MEASURED on a real signed-in profile: 472 characters
+   * captured against 59 actually on screen — 87% of the search index was
+   * GitHub's star-button machinery. The star control ships a confirmation
+   * dialog, a "add this repository to a list" menu and an empty-state panel
+   * as ordinary hidden DOM, so `star`, `starred` and `list` each matched
+   * 77 OF 77 ROWS, and `sorry` matched 30. A find box that answers "all of
+   * them" to a word the reader can see nowhere on the page is worse than no
+   * find box: it is not obviously broken, it is just quietly useless.
+   *
+   * It is invisible signed OUT, where there are no star buttons at all —
+   * the same reason two rounds of measurement missed the row-height bug.
+   *
+   * The fix costs nothing because the answer was already here: `column()`
+   * finds the row's text column to place a note in, and that column is
+   * exactly the half of the row that is prose — name, description, topics,
+   * language, updated. The star column is the other child of the flex row
+   * and is simply not read. A row whose markup we do not recognise falls
+   * back to the whole <li>, which is where it was before. */
+  S.rowText = function rowText(li) {
+    return String(column(li).textContent || "").replace(/\s+/g, " ").trim();
+  };
+
   /** The marker on its own, with no opinion about where it goes — the profile
    *  row places it in a text column, the repo page places it in a sidebar, and
    *  neither placement should be able to change how a note is edited. */
@@ -407,9 +432,7 @@ globalThis.Shelves = globalThis.Shelves || {};
        * afterwards, `textContent` carries our own margin — so every row would
        * match the query "note", and a saved note would be counted twice. Taken
        * once, before the first margin, it stays GitHub's text forever. */
-      if (li.dataset.shText === undefined) {
-        li.dataset.shText = String(li.textContent || "").replace(/\s+/g, " ").trim();
-      }
+      if (li.dataset.shText === undefined) li.dataset.shText = S.rowText(li);
       margin(li, name, note, handlers);
       li.dataset.shName = name;      // how the audit's findings address a row
       li.dataset.shHay = S.haystack(li.dataset.shText, facts[i], note);
@@ -425,6 +448,24 @@ globalThis.Shelves = globalThis.Shelves || {};
     const collapse = button("collapse all");
     const flat = button("flat list", "GitHub's plain ungrouped list");
     const rescan = button("rescan", "Forget cached facts and read them again");
+
+    /* ── READ N MORE — the ceiling, drawn as the choice it is ───────────────
+     * Rung 4 reads one page per repo, and it now stops at `scrapeMax`. This
+     * button is the other half of that: the deferred repos are named, counted,
+     * and one press away — so a large read is something the reader asks for
+     * rather than something that happens to them.
+     *
+     * IT IS A BUTTON AND NOT A WARNING. Nothing went wrong; the amber sentence
+     * beside it is for token rejections and rate limits, and putting a
+     * deliberate limit there would teach the reader to read a choice as a
+     * fault. It exists only when there is something to read, so a normal run
+     * never carries it. */
+    const more = ctx.deferred > 0
+      ? button("read " + ctx.deferred + " more",
+               ctx.deferred + " repositories were left unread to keep this page " +
+               "load small. Reading them costs one request each, and they are " +
+               "remembered afterwards.")
+      : null;
 
     /* ONE BUTTON FOR TWO QUESTIONS, because they are two questions about one
      * collection — what is wrong with the labels (vocab.js) and what is
@@ -490,7 +531,9 @@ globalThis.Shelves = globalThis.Shelves || {};
       note.append(" · ", h);
     }
 
-    bar.append(expand, collapse, flat, rescan, vocab, find, found, note);
+    bar.append(expand, collapse, flat, rescan);
+    if (more) bar.append(more);
+    bar.append(vocab, find, found, note);
     host.appendChild(bar);
 
     /* Built once and toggled, not rebuilt: the panel holds the reader's place
@@ -613,6 +656,7 @@ globalThis.Shelves = globalThis.Shelves || {};
       host.querySelectorAll("details").forEach((d) => (d.open = false))
     );
     rescan.addEventListener("click", () => handlers.rescan());
+    if (more) more.addEventListener("click", () => handlers.more());
 
     find.addEventListener("input", () => S.applyFilter(host, find.value));
     find.addEventListener("keydown", (e) => {

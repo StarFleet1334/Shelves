@@ -9,9 +9,11 @@
  *   3. api.github.com without one         1-2 requests, public only
  *   4. each remaining repo's own page     1 request each, sees private
  *
- * Rung 1 yields nothing today (charter §1: the profile list renders no topic
- * chips) but costs nothing and becomes the whole answer for free if GitHub
- * ever restores them.
+ * Rung 1 was written when the profile list rendered no chips at all (charter
+ * §1). It renders them on SOME rows now — 9 of 77 on the account this was
+ * re-measured against — which is why it is a FLOOR and not an answer: what
+ * the page gave up for free is kept, and every repo it did not name still
+ * climbs. A measurement is true on a date, not forever.
  *
  * Rung 4 is what makes SHELVES correct with NO configuration: the private
  * repos a token would have covered are read from their own pages instead,
@@ -58,12 +60,36 @@ globalThis.Shelves = globalThis.Shelves || {};
      * long after the page it was about had changed again. */
     const seen = { pages: 0, meta: 0, sidebar: 0, counter: 0, time: 0 };
 
-    const todo = [];
+    const wanted = [];
     for (const name of names) {
       const hit = cache[name];
       if (hit && hit.at > freshAfter && Array.isArray(hit.topics)) found.set(name, hit);
-      else todo.push(name);
+      else wanted.push(name);
     }
+
+    /* ── THE CEILING ────────────────────────────────────────────────────────
+     * This loop is the highest-volume thing the extension does: one
+     * authenticated same-origin fetch per repo, and until now it read however
+     * many it was handed. There is a backoff for when GitHub says stop
+     * (below), and there was nothing at all for "do not start" — so an
+     * account the API cannot see was 400 requests that nobody chose, on a page
+     * the reader opened to look at a list.
+     *
+     * The ceiling does not read less for its own sake. It makes reading a lot
+     * a DECISION: read `scrapeMax`, say how many are left, and let the reader
+     * ask for the rest (`deferred`, surfaced by view.js as `read N more`).
+     * That is the same move the unread count already makes — a cost you can
+     * see and answer instead of one that simply happens.
+     *
+     * THE CACHE IS WHAT MAKES *CONTINUE* CHEAP. Everything read on this pass
+     * is written below, so asking for the rest re-reads none of it: a second
+     * pass with the ceiling lifted fetches exactly the ones deferred here.
+     *
+     * A ceiling of 0 or less is read as "no ceiling", so a reader who wants
+     * the old behaviour can have it, and `readAll` lifts it for one pass. */
+    const max = settings.readAll ? 0 : Number(settings.scrapeMax) || 0;
+    const todo = max > 0 ? wanted.slice(0, max) : wanted;
+    const deferred = max > 0 ? wanted.length - todo.length : 0;
 
     let done = 0;
     let read = 0;
@@ -118,6 +144,11 @@ globalThis.Shelves = globalThis.Shelves || {};
     return {
       found, fetched: todo.length, seen, halted,
       unread: todo.length - read,
+      /* NOT counted as unread. An unread repo is one we TRIED and failed to
+       * read, and its cure is rescan; a deferred one was never attempted and
+       * its cure is a button. Saying them in one number would put the blame
+       * for a deliberate ceiling on GitHub. */
+      deferred,
     };
   }
 
@@ -152,40 +183,91 @@ globalThis.Shelves = globalThis.Shelves || {};
      * page, which is why this is a narrowing rather than a refusal. */
     const mine = S.isMine();
 
-    // Rung 1 — the page itself.
-    if (answered() > 0) {
+    /* ── RUNG 1 IS A FLOOR, NOT AN ANSWER FOR EVERYONE ──────────────────────
+     * This used to read `if (answered() > 0) return` — one row carrying chips
+     * ended the ladder for the whole collection. It was written when the
+     * profile list rendered no chips at all, so the branch could only ever
+     * fire when every row had them; GitHub started rendering them on SOME rows
+     * and the same line became a short circuit.
+     *
+     * MEASURED on a real 77-repo account: 9 rows carried chips, so the run
+     * returned `via page` for all 77 and left 68 in Ungrouped having asked
+     * nobody about them — for zero requests, with `warning: ""`, reading
+     * exactly like success.
+     *
+     * And it did not only cost grouping. The record it returns carries three
+     * fields, so `find` lost descriptions, READMEs, languages and licences;
+     * the audit's whole repositories half went to "not asked"; and the canary
+     * cannot fire from here at all, because `health` is "" on this path and
+     * `pageHealth` only ever sees pages rung 4 read. The run that would notice
+     * GitHub moving the sidebar was the run that never happened.
+     *
+     * So the gate is now "everyone answered", and what the chips DID answer is
+     * kept as a floor the rungs below only add to. */
+    const fromChips = answered();
+    const asked = names.filter(Boolean).length;
+    if (asked > 0 && fromChips >= asked) {
       return { topics, facts, source: "page", warning: "", health: "" };
     }
 
     // Rungs 2 and 3 — the API, via the worker. One call answers everyone.
     let warning = "";
-    let source = "";
-    const reply = await askWorker({
+    /* EVERY RUNG THAT CONTRIBUTED, IN THE ORDER IT WAS CLIMBED. One name was
+     * enough while a run could only ever be one rung. With chips as a floor a
+     * single render is routinely two or three, and `via page` alone would now
+     * hide the requests that actually answered most of the collection — which
+     * is P.IV pointing the wrong way. The honest answer is a list. */
+    const rungs = [];
+    if (fromChips) rungs.push("page");
+
+    let reply = await askWorker({
       type: "repos",
       user: S.owner(),
       token: mine ? (settings.token || "") : "",
     });
 
-    const byName = new Map();
-    (reply.repos || []).forEach((r) => byName.set(r.full_name, S.factsFromApi(r)));
-    facts = names.map((n, i) => byName.get(n) || { name: n, topics: [] });
-    topics = facts.map((f) => f.topics || []);
-
     if (mine && settings.token) {
-      source = "api (token)";
+      rungs.push("api (token)");
       /* A pasted token that has expired must be SAID, not silently ignored:
        * the user cannot otherwise tell an expired credential from an untagged
        * repository (P.IV). */
       if (!reply.ok && (reply.status === 401 || reply.status === 403)) {
         warning = "token rejected (" + reply.status + ")";
-        source = "api (public)";
+        /* ── THE FALLBACK IS A REQUEST, NOT A LABEL ──────────────────────────
+         * This branch used to set the source line to `api (public)` and stop.
+         * The public endpoint was never asked. So the sentence the whole
+         * product stakes its trust on named a rung that had not run, and
+         * because `byName` stayed empty EVERY repo fell through as missing:
+         * one expired token turned a one-request page into a page that reads
+         * every repository you own, one at a time.
+         *
+         * The public endpoint needs no credential and answers every public
+         * repo in the same one call. Only what it genuinely cannot see — the
+         * private ones — should reach rung 4. */
+        reply = await askWorker({ type: "repos", user: S.owner(), token: "" });
+        rungs[rungs.length - 1] = "api (public)";
+        if (!reply.ok) warning += " · api unavailable";
       } else if (!reply.ok) {
         warning = "api unavailable";
       }
     } else {
-      source = "api (public)";
+      rungs.push("api (public)");
       if (!reply.ok) warning = "api unavailable";
     }
+
+    const byName = new Map();
+    (reply.repos || []).forEach((r) => byName.set(r.full_name, S.factsFromApi(r)));
+    /* THE FLOOR HOLDS HERE OR IT HOLDS NOWHERE. This line used to be a plain
+     * `byName.get(n) || { name: n, topics: [] }`, which overwrites a repo the
+     * chips already answered with an empty record the moment the API cannot
+     * see it — handing rung 4 a bill for repos that were answered for free.
+     * The API wins when it answered, because it carries ten fields to the
+     * chips' one; otherwise the chips stand. */
+    const chips = facts;
+    facts = names.map((n, i) =>
+      byName.get(n) ||
+      ((chips[i] && chips[i].topics || []).length ? chips[i] : { name: n, topics: [] }));
+    topics = facts.map((f) => f.topics || []);
 
     // Rung 4 — whatever the API could not see. Private repos land here.
     let health = "";
@@ -193,15 +275,18 @@ globalThis.Shelves = globalThis.Shelves || {};
 
     /* The whole cost of the ladder is here, and it is spent on the reader's
      * own session. It is not spent on anyone else's profile. */
+    let deferred = 0;
     if (missing.length && !mine) {
       warning = warning || ("someone else's profile — free rungs only, " +
                             missing.length + " unread");
-      return { topics, facts, source: source + " · not yours", warning, health: "" };
+      return { topics, facts, source: rungs.join(" + ") + " · not yours",
+               warning, health: "", deferred: 0 };
     }
 
     if (missing.length) {
-      const { found, fetched, seen, halted, unread } =
-        await scrape(missing, settings, onProgress);
+      const r = await scrape(missing, settings, onProgress);
+      const { found, fetched, seen, halted, unread } = r;
+      deferred = r.deferred;
       health = S.pageHealth(seen);
       /* P.IV — an unread repo is Ungrouped for a REASON, and the reader
        * cannot tell that from an untagged one by looking. */
@@ -216,11 +301,14 @@ globalThis.Shelves = globalThis.Shelves || {};
         topics = facts.map((f) => (f && f.topics) || []);
         // Name the cache explicitly: "repo pages" when nothing was fetched
         // would leave the user unable to tell a warm run from a cold one (P.IV).
-        const rung = fetched ? "repo pages" : "repo pages (cached)";
-        source = source.startsWith("api (token)") ? "token + " + rung : rung;
+        rungs.push(fetched ? "repo pages" : "repo pages (cached)");
       }
     }
 
-    return { topics, facts, source, warning, health };
+    /* `deferred` is not a warning. Nothing went wrong — a ceiling the reader
+     * can lift is a choice offered, and view.js draws it as the button that
+     * lifts it. Putting it in the amber sentence beside "token rejected" would
+     * teach the reader to read a deliberate limit as a fault. */
+    return { topics, facts, source: rungs.join(" + "), warning, health, deferred };
   };
 })(globalThis.Shelves);

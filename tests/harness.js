@@ -33,6 +33,12 @@ function byLabel(view) {
 
 const SCENARIOS = [
   check("chips already on the page — zero network", async (ctx) => {
+    /* EVERY ROW CARRIES CHIPS. That is the only shape in which the page alone
+       is the whole answer, and it is the shape this scenario was written for —
+       it used to give chips to three rows of four and assert zero network
+       anyway, which is the short-circuit ladder-floor exists to remove. The
+       fourth row now carries an EMPTY chip list, which is an answer ("this
+       repo has no topics") and not a silence. */
     const w = build({
       owner: "octo",
       settings: { groups: ["aiproject", "tooling"] },
@@ -40,7 +46,7 @@ const SCENARIOS = [
         { name: "agent", chips: ["aiproject"] },
         { name: "rag", chips: ["aiproject", "python"] },
         { name: "dotfiles", chips: ["tooling"] },
-        { name: "notes", chips: [] },
+        { name: "notes", chips: ["misc"] },
       ],
     });
     await settle();
@@ -52,10 +58,178 @@ const SCENARIOS = [
     assert(ctx, b.tooling && b.tooling.count === 1, "tooling should hold 1");
     assert(ctx, b.Ungrouped && b.Ungrouped.count === 1, "Ungrouped should hold 1");
     assert(ctx, v.shelves[v.shelves.length - 1].label === "Ungrouped", "Ungrouped must be last");
-    assert(ctx, /via page/.test(v.note), "source should be 'page', got: " + v.note);
-    assert(ctx, w.counters.api === 0, "page chips must cost no API call");
-    assert(ctx, w.counters.scraped.length === 0, "page chips must cost no scraping");
+    /* `$` and not a substring: the page answering EVERYONE is the whole claim,
+       so a line reading "via page + api (public)" must fail here even though it
+       contains "via page". */
+    assert(ctx, /· via page$/.test(v.note),
+      "the page alone answered, so it must be the only rung named, got: " + v.note);
+    assert(ctx, w.counters.api === 0, "a fully-chipped page must cost no API call");
+    assert(ctx, w.counters.scraped.length === 0, "a fully-chipped page must cost no scraping");
     ctx.info = v.note;
+  }),
+
+  check("ladder-floor — chips are a floor, and the repos they missed still climb",
+    async (ctx) => {
+    /* THE SHORT CIRCUIT THIS REPLACES. `if (answered() > 0) return` ended the
+       ladder for the whole collection the moment ONE row carried chips.
+       Measured on a real 77-repo account: 9 rows chipped, 68 left in Ungrouped
+       having asked nobody, for zero requests and no warning.
+
+       The fixture is that shape in miniature: one row chipped, three not, and
+       an API that cannot see any of them (they are private and apiRepos is
+       empty). So the three must reach rung 4 — and the chipped one must NOT,
+       because a floor that costs a request is not a floor. */
+    const w = build({
+      viewer: "octo",
+      owner: "octo",
+      settings: { groups: ["aiproject", "tooling"] },
+      apiRepos: [],
+      repos: [
+        { name: "agent", chips: ["aiproject"], topics: ["aiproject"], private: true },
+        { name: "rag", topics: ["aiproject", "python"], private: true },
+        { name: "dotfiles", topics: ["tooling"], private: true },
+        { name: "notes", topics: [], private: true },
+      ],
+    });
+    await settle(1400);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+    const b = byLabel(v);
+
+    /* The floor held: agent keeps the shelf its chip named. */
+    assert(ctx, b.aiproject && b.aiproject.count === 2,
+      "aiproject should hold agent (chips) AND rag (scraped), got: " +
+      ((b.aiproject || {}).count));
+    assert(ctx, b.tooling && b.tooling.count === 1, "tooling should hold dotfiles");
+    assert(ctx, b.Ungrouped && b.Ungrouped.count === 1,
+      "only the genuinely untagged repo is left over, got: " + ((b.Ungrouped || {}).count));
+
+    /* THE ASSERTION THAT MATTERS: the chipped repo cost nothing extra, and the
+       three the page did not answer for were all read. */
+    assert(ctx, w.counters.scraped.length === 3,
+      "the 3 repos the page did not answer must climb, scraped: " +
+      w.counters.scraped.join());
+    assert(ctx, w.counters.scraped.indexOf("octo/agent") === -1,
+      "the chipped repo must NOT be re-read — it was already answered for free");
+
+    /* P.IV — two rungs answered, so the line names two. */
+    assert(ctx, /page/.test(v.note) && /repo pages/.test(v.note),
+      "the source line must name every rung that contributed, got: " + v.note);
+    ctx.info = v.note + "  |  scraped " + w.counters.scraped.length + ", agent free";
+  }),
+
+  check("ceiling — rung 4 stops, says how many are left, and can be asked for the rest",
+    async (ctx) => {
+    /* THE HIGHEST-VOLUME PATH HAD NO CAP. There is a backoff for when GitHub
+       says stop, and there was nothing at all for "do not start" — so an
+       account the API cannot see was one authenticated fetch per repo, however
+       many that was, on a page opened to look at a list.
+
+       Twelve repos the API cannot see, a ceiling of five. */
+    const w = build({
+      viewer: "octo",
+      owner: "octo",
+      settings: { groups: ["keep"], scrapeMax: 5, concurrency: 3 },
+      apiRepos: [],
+      repos: Array.from({ length: 12 }, (_, i) => ({
+        name: "r" + i, topics: i < 4 ? ["keep"] : [], private: true,
+      })),
+    });
+    await settle(1600);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+
+    assert(ctx, w.counters.scraped.length === 5,
+      "the ceiling must hold: 5 expected, read " + w.counters.scraped.length);
+
+    /* THE OTHER HALF. A cap with no way past it is not a choice, it is a
+       smaller silence — so the deferred repos are counted on a button. */
+    const btns = [...w.win.document.querySelectorAll("#shelves-host .sh-btn")]
+      .map((b) => b.textContent);
+    assert(ctx, btns.indexOf("read 7 more") !== -1,
+      "the toolbar must offer the rest, by count. buttons: " + btns.join(" | "));
+
+    /* NOT A WARNING. Nothing went wrong; a ceiling the reader can lift is an
+       offer, and filing it beside "token rejected" would teach them to read a
+       deliberate limit as a fault. */
+    assert(ctx, !/7/.test(v.warn || ""),
+      "a deferred repo is not a fault and must stay out of the warning, got: " + v.warn);
+
+    /* AND CONTINUE MUST BE CHEAP. The button reloads (untestable here), so the
+       pass it asks for is driven directly: with the ceiling lifted, exactly the
+       seven that were deferred are read — the five already cached are not. */
+    const before = w.counters.scraped.length;
+    const rows = [...w.win.document.querySelectorAll("#shelves-host details li")];
+    const names = rows.map((li) => li.dataset.shName);
+    const settings = await w.win.Shelves.load();
+    const again = await w.win.Shelves.resolve(rows, names, { ...settings, readAll: true });
+    const second = w.counters.scraped.slice(before);
+    assert(ctx, second.length === 7,
+      "continue must read exactly the deferred 7, read " + second.length);
+    assert(ctx, again.deferred === 0, "and nothing is left deferred afterwards");
+    assert(ctx, again.topics.filter((t) => t.length).length === 4,
+      "with every repo read, all 4 tagged ones are found, got " +
+      again.topics.filter((t) => t.length).length);
+    ctx.info = "5 of 12 read, 7 offered, 7 read on continue — none re-read";
+  }),
+
+  check("token-fallback — a dead token falls back to the public API, not to 76 page reads",
+    async (ctx) => {
+    /* THIS BRANCH USED TO SET THE LABEL AND SKIP THE REQUEST. On a 401 it
+       wrote `source = "api (public)"` and stopped: the public endpoint was
+       never asked, so the sentence the whole product stakes its trust on named
+       a rung that had not run, and every repo fell through as missing — one
+       expired token turning a one-request page into a page that reads every
+       repository you own, one at a time.
+
+       `apiPublic` is what lets the fixture say it: the token door answers 401,
+       the public door answers normally. */
+    const w = build({
+      viewer: "octo",
+      owner: "octo",
+      token: "github_pat_EXPIRED",
+      settings: { groups: ["aiproject"] },
+      apiRepos: 401,
+      apiPublic: [
+        { name: "pubtool", topics: ["aiproject"] },
+        { name: "pubdocs", topics: [] },
+      ],
+      repos: [
+        { name: "pubtool", topics: ["aiproject"] },
+        { name: "pubdocs", topics: [] },
+        { name: "secret", topics: ["aiproject"], private: true },
+      ],
+    });
+    await settle(1400);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+
+    assert(ctx, /rejected \(401\)/.test(v.warn || ""),
+      "the dead token is still said out loud, got: " + v.warn);
+    assert(ctx, /api \(public\)/.test(v.note),
+      "the source line names the rung that actually answered, got: " + v.note);
+
+    /* TWO CALLS, NOT ONE: the rejected one and the retry. A single call would
+       mean the label was written without the request behind it. */
+    assert(ctx, w.counters.api === 2,
+      "the public endpoint must actually be asked, api calls: " + w.counters.api);
+    assert(ctx, w.counters.lastAuth === false,
+      "and the retry must carry no credential");
+
+    /* THE POINT OF ALL OF IT: only what the public API genuinely cannot see
+       reaches rung 4. Before this, all three were scraped. */
+    assert(ctx, w.counters.scraped.length === 1 &&
+                w.counters.scraped[0] === "octo/secret",
+      "only the private repo should be read one page at a time, scraped: " +
+      w.counters.scraped.join());
+
+    const b = byLabel(v);
+    assert(ctx, b.aiproject && b.aiproject.count === 2,
+      "and the shelving is still right, got: " + ((b.aiproject || {}).count));
+    ctx.info = v.note + "  |  2 api calls, 1 scrape instead of 3";
   }),
 
   check("no chips, no token — public API + repo-page scraping", async (ctx) => {
@@ -242,7 +416,10 @@ const SCENARIOS = [
       "must fall through to repo pages and still shelve");
     const total = v.shelves.reduce((n, s) => n + s.count, 0);
     assert(ctx, total === 2, "every repo must still be on the page, got " + total);
-    ctx.info = v.note + " · " + v.warn;
+    /* `.sh-note` already CONTAINS the warning — view.js appends it there — so
+       adding v.warn printed the rejection twice. Harmless until the fallback
+       made the sentence two clauses long and the line read as four. */
+    ctx.info = v.note;
   }),
   check("facts — one parse keeps everything the repo page said", async (ctx) => {
     const w = build({
@@ -328,6 +505,20 @@ const SCENARIOS = [
     assert(ctx, v.visible.join() === "throttle-kit", "topics are searchable, got: " + v.visible.join());
     const empty = [...w.win.document.querySelectorAll(".sh-shelf.sh-nomatch")];
     assert(ctx, empty.length >= 1, "a shelf with no hits is dimmed, not deleted");
+
+    /* AND IT MUST NOT SEARCH WHAT THE READER CANNOT SEE. GitHub's star
+       control ships its confirmation copy and its "add to a list" menu as
+       hidden DOM inside every row; reading the whole <li> put 322 characters
+       in each row's index against 53 on screen, and answered "77 of 77" to
+       `star`, `starred` and `list` on a real profile. The row's text is the
+       TEXT COLUMN's — see S.rowText. */
+    for (const ghost of ["starred", "lists", "sorry", "unstar"]) {
+      type(w.win, ghost);
+      v = readShelves(w.win);
+      assert(ctx, v.visible.length === 0,
+        "\"" + ghost + "\" is GitHub's hidden chrome and must match no row, got: " +
+        v.visible.join());
+    }
 
     // a language, which GitHub's box also cannot match
     type(w.win, "python");
@@ -879,14 +1070,34 @@ const SCENARIOS = [
 
     assert(ctx, /changed shape/.test(v.canary),
       "the canary must say the page moved, got: " + JSON.stringify(v.canary));
-    assert(ctx, /unreliable/.test(v.canary),
-      "and say it gravely when it is the SIDEBAR that moved - every shelf on " +
-      "the page depends on it, got: " + v.canary);
     assert(ctx, /read 6 pages/.test(v.canary),
       "with the sample it is speaking from, got: " + v.canary);
     // it must still shelve: a warning is not a failure (P.III)
     const total = v.shelves.reduce((n, s) => n + s.count, 0);
     assert(ctx, total === 6, "every repo is still on the page, got " + total);
+
+    /* A RENAMED CLASS IS RECOVERED, NOT MOURNED. `broken` renames the About
+       panel's class AND drops the description meta; the class half is exactly
+       what the structural finder in facts.js exists for, and it is why this
+       assertion is about the TOPICS rather than about the sentence. The
+       fixture has carried a decoy `/topics/decoy` link outside the sidebar
+       since it was written, and nothing ever asserted it stayed out — which is
+       how `|| doc` survived: a fabricated field looks exactly like a found one.
+
+       MEASURED, the day this changed: the old class pair matched 0 of 6 real
+       repo pages parsed the way scrape() parses them, and 0 of 50 on a live
+       run. The finder matched 6 of 6. */
+    assert(ctx, !/changed shape.*sidebar/.test(v.canary) &&
+                !/About sidebar on 0/.test(v.canary),
+      "a merely renamed class must be RECOVERED by the structural finder, " +
+      "not reported as a moved sidebar, got: " + v.canary);
+    const keep = v.shelves.find((sh) => sh.label === "keep");
+    assert(ctx, keep && keep.count === 6,
+      "and the topics must still be read out of it, keep holds: " +
+      ((keep || {}).count));
+    assert(ctx, !v.shelves.some((sh) => sh.label === "decoy"),
+      "the README's decoy /topics/ link must never become a shelf — that is " +
+      "what scoping is for, and `|| doc` is how it was lost");
 
     /* FIVE PAGES IS THE FLOOR. Below it a run of genuinely sparse repos is
        indistinguishable from a dead selector, and a canary that cries on a
@@ -901,6 +1112,24 @@ const SCENARIOS = [
     assert(ctx, readShelves(small.win).canary === "",
       "four pages is not a sample, got: " + readShelves(small.win).canary);
 
+    /* AND THE GRAVE CASE STILL EXISTS. `noAbout` takes the heading the finder
+       climbs from, so there is genuinely nowhere to read topics from — the
+       failure the canary was written for, now stated in the one shape that
+       still produces it. */
+    const gone = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      repos: "abcdef".split("").map((n) => ({
+        name: n, topics: ["keep"], private: true, broken: true, noAbout: true,
+      })),
+    });
+    await settle(1600);
+    const g = readShelves(gone.win);
+    assert(ctx, /unreliable/.test(g.canary || ""),
+      "no About panel at all is grave — every shelf depends on it, got: " +
+      JSON.stringify((g || {}).canary));
+
     // and a healthy run says nothing at all
     const ok = build({
       owner: "octo",
@@ -913,7 +1142,7 @@ const SCENARIOS = [
     await settle(1600);
     assert(ctx, readShelves(ok.win).canary === "",
       "an intact page must be silent, got: " + readShelves(ok.win).canary);
-    ctx.info = "6 broken pages named; 4 below the floor; a healthy run quiet";
+    ctx.info = "renamed class recovered; no About panel is grave; 4 below the floor; a healthy run quiet";
   }),
 
   check("credentials - the reader's token and session are spent on the reader's " +
