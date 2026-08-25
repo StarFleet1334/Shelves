@@ -962,3 +962,33 @@
 /* The pin verb acts on the shelf the row is already on, so it is separated
    from the list of shelves to move to. */
 .sh-pinpick { border-bottom: 1px solid var(--borderColor-default, #30363d); }
+
+/* ---- a row held by hand, and the way back off ---------------------------
+   AN OVERRIDE OUTRANKS EVERY TOPIC AND SURVIVES A RESCAN, both on purpose —
+   and a row sitting on a shelf its topics do not name is otherwise drawn
+   exactly like one the tags put there. That is how re-tagging a repo and
+   pressing `rescan` reads as a broken scan: the scan is fine, its answer is
+   being outranked, and nothing on the page says so.
+
+   Lit always, not on hover: the whole point is to be noticed by a reader who
+   is not already looking for it. */
+#shelves-host li[data-sh-own="1"] .sh-grip {
+  opacity: 0.7;
+  color: var(--fgColor-attention, #d29922);
+}
+#shelves-host li[data-sh-own="1"]:hover .sh-grip,
+#shelves-host li[data-sh-own="1"] .sh-grip:focus {
+  opacity: 1;
+  color: var(--fgColor-attention, #d29922);
+}
+
+/* The release entry. Ruled off from the shelves below it because it is not a
+   shelf — it is the absence of an opinion — and it is the one entry in the
+   list that can name a shelf the page is not currently drawing. */
+.sh-shelfpick.sh-freepick {
+  color: var(--fgColor-attention, #d29922);
+  margin-bottom: 3px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--borderColor-default, #30363d);
+  border-radius: 4px 4px 0 0;
+}

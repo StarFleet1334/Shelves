@@ -758,6 +758,120 @@ const SCENARIOS = [
     ctx.info = "3 held by hand, 1 left over; survives a rescan; one write per move";
   }),
 
+  check("override released - re-tag a held repo and there has to be a way out",
+    async (ctx) => {
+    /* THE TRAP THAT TWO CORRECT RULES MADE BETWEEN THEM. An override outranks
+       every topic (view.js) and a rescan must never take one (store.js) —
+       both right on their own. Together, re-tagging a held repo on GitHub and
+       pressing `rescan` moves nothing, and NOTHING ON THE PAGE SAYS WHY: the
+       scan is working perfectly and its answer is being outranked.
+
+       The way out was supposed to be "put it back where its topics say", and
+       the move menu offers only shelves that are DRAWN — so when the held repo
+       is the only one carrying its new topic, that shelf does not exist
+       BECAUSE the repo is being held off it. Circular, and the reader has no
+       gesture at all. Reproduced from a real profile: `walky` re-tagged from
+       `extensions` to `cool`, moved to Ungrouped by hand in the hope that it
+       would clear the opinion (it stores one — see the scenario above), and
+       stuck there through every rescan. */
+    const w = build({
+      viewer: "octo",
+      owner: "octo",
+      settings: {},                                   // auto-group: one shelf per topic
+      apiRepos: [],
+      overrides: { "octo/walky": "extensions" },
+      repos: [
+        { name: "walky", topics: ["cool"], private: true },        // re-tagged on GitHub
+        { name: "shelves", topics: ["extensions"], private: true },
+        { name: "spare", topics: [], private: true },
+      ],
+    });
+    await settle(1400);
+    let b = byLabel(readShelves(w.win));
+    assert(ctx, b.extensions && b.extensions.count === 2,
+      "the symptom: the held repo does not move, got " + ((b.extensions || {}).count));
+    assert(ctx, !b.cool,
+      "and the shelf its topics name is not drawn — nothing else carries `cool`");
+
+    /* A RESCAN IS STILL FORBIDDEN TO TAKE IT. The fix is a gesture, not a
+       weakening of the rule that made the trap. */
+    await w.win.Shelves.cache.clear();
+    assert(ctx, (await w.win.Shelves.overrides.read())["octo/walky"] === "extensions",
+      "a rescan must still leave the reader's own shelving alone");
+
+    const li = [...w.win.document.querySelectorAll("#shelves-host li")]
+      .find((x) => x.dataset.shName === "octo/walky");
+    assert(ctx, li, "the held row is on the page");
+    if (!li) return;
+
+    /* IT IS DRAWN AS HELD. A row on a shelf its topics do not name looked
+       exactly like one the tags put there, which is most of why the symptom
+       reads as a broken scan rather than as an opinion being honoured. */
+    assert(ctx, li.dataset.shOwn === "1",
+      "a row held by hand says so, got " + JSON.stringify(li.dataset.shOwn));
+    assert(ctx, li.dataset.shNatural === "cool",
+      "and carries where it would go with no opinion, got " +
+      JSON.stringify(li.dataset.shNatural));
+    const other = [...w.win.document.querySelectorAll("#shelves-host li")]
+      .find((x) => x.dataset.shName === "octo/shelves");
+    assert(ctx, other && other.dataset.shOwn === "",
+      "a row the TOPICS put there is not marked — the mark has to mean something");
+
+    li.querySelector(".sh-grip").click();
+    const picks = [...li.querySelectorAll(".sh-shelfpick")].map((x) => x.textContent);
+    const free = [...li.querySelectorAll(".sh-freepick")][0];
+    assert(ctx, free && free.textContent === "↺ cool",
+      "the menu offers the shelf its topics name, drawn or not; got " +
+      JSON.stringify(picks));
+    if (!free) return;
+
+    const was = w.reloads.n;
+    free.click();
+    await settle(400);
+    assert(ctx, (await w.win.Shelves.overrides.read())["octo/walky"] === undefined,
+      "releasing it deletes the key rather than storing a second opinion");
+    /* AND THE PAGE IS RE-RUN, because `moveRow` needs a drawn shelf and there
+       is none — leaving it would put the row and the store in disagreement
+       for the rest of the session, which is the exact scar the leftovers-shelf
+       no-op left. The cache makes the second pass free. */
+    assert(ctx, w.reloads.n === was + 1,
+      "a release onto a shelf nothing draws re-runs the pass, got " +
+      (w.reloads.n - was) + " reload(s)");
+
+    /* AND AN ORDINARY MOVE IS STILL ONE WRITE AND NO RELOAD. The reload above
+       is bought by the shelf being absent, and must not leak into the move
+       that was always quiet. */
+    const quiet = build({
+      viewer: "octo",
+      owner: "octo",
+      settings: { groups: ["keep", "other"] },
+      apiRepos: [],
+      repos: [
+        { name: "one", topics: ["keep"], private: true },
+        { name: "two", topics: ["other"], private: true },
+      ],
+    });
+    await settle(1400);
+    const row = [...quiet.win.document.querySelectorAll("#shelves-host li")]
+      .find((x) => x.dataset.shName === "octo/one");
+    if (row) {
+      const n = quiet.reloads.n;
+      row.querySelector(".sh-grip").click();
+      const to = [...row.querySelectorAll(".sh-shelfpick")]
+        .find((x) => x.textContent === "other");
+      if (to) to.click();
+      await settle(400);
+      assert(ctx, quiet.reloads.n === n,
+        "moving onto a shelf that IS drawn must stay quiet, got " +
+        (quiet.reloads.n - n) + " reload(s)");
+      assert(ctx, (await quiet.win.Shelves.overrides.read())["octo/one"] === "other",
+        "and it is still written down");
+    }
+
+    ctx.info = "held row marked; ↺ cool offered though undrawn; key deleted, " +
+               "one reload; an ordinary move stays quiet";
+  }),
+
   check("suggest - a cold start offers shelves instead of one dump",
     async (ctx) => {
     /* THE FIRST RUN FOR SOMEONE WHO HAS NEVER TAGGED A REPO produces the page

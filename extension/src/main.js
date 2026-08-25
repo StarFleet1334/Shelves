@@ -253,13 +253,27 @@ globalThis.Shelves = globalThis.Shelves || {};
              * key goes; if it would land somewhere else, the reader has said
              * something and it is stored — including the leftovers label. */
             const i = names.indexOf(name);
-            const natural = S.bucketFor(i >= 0 ? curTopics[i] || [] : [], settings);
+            /* THE FACTS GO WITH THE TOPICS. A rule shelf is judged against
+             * thirteen fields, so asking `bucketFor` with topics alone gives
+             * the natural shelf of a repo the desk knows nothing about — and
+             * this answer decides whether the reader's opinion is STORED or
+             * DELETED. Wrong here means a move that silently keeps no key. */
+            const natural = S.bucketFor(i >= 0 ? curTopics[i] || [] : [], settings,
+                                        "", i >= 0 ? curFacts[i] : null);
             const { ok } = await S.overrides.set(name, natural === label ? "" : label);
             if (!ok) return;
-            /* The write is the truth; this is the page catching up. If the
-             * shelf has gone (a filter, a re-render) the next load still puts
-             * the row in the right place. */
-            if (li) S.moveRow(host, li, label);
+            if (!li) return;
+            /* The write is the truth; this is the page catching up. Two cases,
+             * and only one of them can: a shelf that is DRAWN takes the row
+             * with no reload, and a shelf that is not — which is what
+             * releasing a repo back onto a shelf only IT would create looks
+             * like — has nowhere to catch up TO, so the pass is re-run
+             * instead of leaving the page disagreeing with the store for the
+             * rest of the session. The cache makes that free; nothing is
+             * fetched twice. `flat list` draws no shelves at all and must
+             * never reload: there the row is already where it belongs. */
+            if (S.hasShelf(host, label)) S.moveRow(host, li, label);
+            else if (host.querySelector("details.sh-shelf")) location.reload();
           },
 
           /* ---- the top of the shelf ------------------------------------

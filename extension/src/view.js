@@ -101,6 +101,27 @@ globalThis.Shelves = globalThis.Shelves || {};
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push(li);
       li.dataset.shPin = pinned[who[i]] ? "1" : "";
+      /* ── WHERE THIS ROW WOULD GO WITH NO OPINION AT ALL ──────────────────
+       * An override outranks every topic and is exempt from `cache.clear()`
+       * (store.js) — both deliberate, and together they have one trap in
+       * them. Re-tag a repo, press `rescan`, and nothing moves: the scan is
+       * working perfectly and the answer is being outranked, with nothing on
+       * the page saying so. The way out was meant to be "drag it back to the
+       * shelf its topics name", except the move menu offers only shelves that
+       * are DRAWN — and when the held repo is the only one carrying that
+       * topic, that shelf does not exist BECAUSE the repo is being held off
+       * it. Measured on the live page: `walky` re-tagged `extensions` ->
+       * `cool` could not be released by any gesture in the UI.
+       *
+       * So the natural shelf is computed here, where the parallel arrays are,
+       * and stamped on the row for the grip's menu to offer. The second call
+       * only happens for a row that IS held, which on a real account is a
+       * handful of rows out of eighty. */
+      const own = typeof ov[who[i]] === "string" ? ov[who[i]].trim() : "";
+      li.dataset.shOwn = own ? "1" : "";
+      li.dataset.shNatural = own
+        ? S.bucketFor(topics[i] || [], settings, "", fs[i], specs)
+        : key;
       /* COUNTED OVER EVERY ROW, not only the ones that reached the leftovers
        * shelf. A repo this rule could not judge may still have matched an
        * EARLIER shelf and be sitting there — and it is still a repo this rule
@@ -477,6 +498,14 @@ globalThis.Shelves = globalThis.Shelves || {};
       .map((e) => e.textContent);
   }
 
+  /** Is a shelf by this name actually DRAWN? The override handler has to tell
+   *  "the row is already sitting there" from "there is nowhere to put it", and
+   *  only the second is worth a reload — releasing a repo back onto a shelf
+   *  that only it would create is exactly the second. */
+  S.hasShelf = function hasShelf(host, label) {
+    return shelfNames(host).indexOf(label) !== -1;
+  };
+
   /** Re-home the row and fix both counts, without a reload. The write has
    *  already happened; this is the page catching up with it. */
   S.moveRow = function moveRow(host, li, label) {
@@ -599,6 +628,28 @@ globalThis.Shelves = globalThis.Shelves || {};
       const here = (li.closest("details.sh-shelf") || {}).querySelector
         ? (li.closest("details.sh-shelf").querySelector(".sh-name") || {}).textContent
         : "";
+      /* ── THE WAY BACK OUT ─────────────────────────────────────────────
+       * Offered ONLY when this row is actually held by an override and its
+       * topics name somewhere else — otherwise it is a second button doing
+       * what pressing the current shelf already does. Unlike every other
+       * entry it is offered for a shelf that is NOT drawn, which is the whole
+       * reason it exists: that case is the one with no other exit. */
+      const natural = li.dataset.shNatural || "";
+      if (li.dataset.shOwn === "1" && natural && natural !== here) {
+        const free = document.createElement("button");
+        free.type = "button";
+        free.className = "sh-shelfpick sh-freepick";
+        free.textContent = "↺ " + natural;
+        free.title = "Forget where you put this one and let its topics decide" +
+          " — it goes back to " + natural + ". Nothing on GitHub changes.";
+        free.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          closeMenus(host);
+          handlers.override(name, natural, li);
+        });
+        menu.append(free);
+      }
       labels.forEach((label) => {
         const b = document.createElement("button");
         b.type = "button";
