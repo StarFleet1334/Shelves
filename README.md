@@ -1,76 +1,85 @@
+<div align="center">
+
+<img src="extension/icons/128.png" alt="" width="76">
+
 # SHELVES
 
-Group your GitHub repositories by topic, in the page you already open.
+### Folders for GitHub's Repositories tab &mdash; built from the topics you already have
 
-`github.com/<you>?tab=repositories` is one flat list — 76 repos in a column,
-three filters, no folders. SHELVES re-draws it as named, counted, collapsible
-shelves built from the **topics** you already put on your repos.
+`github.com/<you>?tab=repositories` is one flat column.<br>
+SHELVES re-draws it as named, counted, collapsible shelves, in the page you already open.
 
-Then it does things the page cannot. `/` searches your repositories by
-**description, topic, language, licence and README** — not just by name, which
-is all GitHub's own box can match. Every row carries a **private note**, kept in
-your browser, that nothing on GitHub offers anywhere. Every shelf wears a
-**colour and a glyph** so you find one by recognising it rather than by reading.
-And **audit** reads the collection back to you: which topics are three spellings
-of one idea, which are on everything and therefore group nothing, and which of
-your repos have no description, no README or no licence.
+<br>
 
-A shelf does not have to be a word, either. `Java = lang:java fork:false` is a
-shelf whose membership is a **question**, asked once per page against records
-the extension already read — thirteen fields, all AND-ed, `-` to negate. Each
-header then says what the shelf is **worth** rather than only how big it is:
-total stars, how many have gone stale, and how many moved *since you were last
-here*, which is the one thing GitHub cannot tell you because it does not know
-when you looked. A row wears small chips for the other shelves it matched, and
-the handful you are actually working on can be **pinned** to the top of theirs.
+![Manifest V3](https://img.shields.io/badge/Manifest-V3-1f6feb?style=for-the-badge)
+![Chrome and Edge](https://img.shields.io/badge/Chrome%20%C2%B7%20Edge-supported-238636?style=for-the-badge)
+![No build step](https://img.shields.io/badge/build%20step-none-8957e6?style=for-the-badge)
+![Zero dependencies](https://img.shields.io/badge/runtime%20deps-0-db6d28?style=for-the-badge)
+<br>
+![Read only](https://img.shields.io/badge/writes%20to%20GitHub-never-0d1117?style=for-the-badge&labelColor=238636)
+![Hosts](https://img.shields.io/badge/hosts%20contacted-2-1f6feb?style=for-the-badge)
+![Tests](https://img.shields.io/badge/39%20scenarios%20%C2%B7%20533%20probes-passing-238636?style=for-the-badge)
+![Licence](https://img.shields.io/badge/licence-MIT-8b949e?style=for-the-badge)
 
-It has an answer for the first day, too — the account that has never tagged
-anything, where grouping by topic is correct and useless. It **suggests** the
-shelves your repository names and languages already imply, **walks** you through
-the untagged repos one tab at a time, and lets you put a repo on a shelf **by
-hand**. All three are kept in this browser; none of them writes to GitHub.
+<br>
 
-It is a page you can work at speed. The shelves are drawn in the **first frame**
-from what is already free and correct themselves when the ladder answers, so a
-slow read happens behind a page you can already use. **compact**
-puts a repository on one line — 109px down to 41px, nine rows a screen up to
-twenty-four — and remembers that per profile. And `/`, `j`, `k`, `1`–`9`, `e` and
-`c` mean the map can be walked without a mouse.
+<img src="docs/media/00-demo.gif" alt="Flat list to shelved to search to audit" width="900">
 
-It no longer lives on one page. Open a repo and it wears its shelf's mark, in the
-shelf's colour, with your private note — and if you let it, it quietly keeps its
-cache warm while you are elsewhere on GitHub so you never wait out a cold read
-again.
+<sub><b>flat list &rarr; shelved &rarr; search &rarr; audit</b>, on a real 78-repository account</sub>
 
-It is a lens, not an editor. It never writes to your GitHub account, and it
-talks to exactly two hosts — `github.com` and `api.github.com`. Nothing it
-learns leaves your browser.
+<br><br>
 
-It does **keep** things there, though, and the charter spells out exactly what
-(topics, descriptions, README openings, your notes — for private repos too,
-unencrypted, in your browser profile). Worth reading before you install it on a
-shared machine.
+<a href="#install-and-run"><b>Install</b></a> &nbsp;&middot;&nbsp;
+<a href="#the-page-as-an-instrument"><b>What it does</b></a> &nbsp;&middot;&nbsp;
+<a href="#how-it-gets-the-topics"><b>How it works</b></a> &nbsp;&middot;&nbsp;
+<a href="#trust-and-your-data"><b>Your data</b></a> &nbsp;&middot;&nbsp;
+<a href="#known-limits"><b>Limits</b></a>
 
-```
-┌ expand all · collapse all · compact · flat list · rescan · audit 9 · [find  /] ─── 76 repos · 4 shelves · 31 tagged · via page + api (public) + repo pages ┐
+</div>
 
-▾ aiproject                                                                                         12
-    chat-agent          Python  ★2   Updated 2 days ago      Private
-    rag-pipeline        Python  ★0   Updated last week       Private
-    …
-▸ config                                                                                             1
-▸ learning                                                                                           9
-▸ Ungrouped                                                                                         54
-```
+---
 
-Type `rate limiting` and the two repos whose *descriptions* say so rise out of
-seventy-six, regardless of what they are called.
-```
-▾ aiproject                                                                                        1 / 12
-    throttle-kit        Python  ★42  Updated 2 days ago
-      ✎ the one with the broken deploy
-▸ tooling (dimmed, no matches)                                                                     0 / 9
-```
+## The problem is one column
+
+Three filters, a search box that matches names, and &mdash; on the account every number in
+this README was measured against &mdash; **78 repositories in a single column**. There is no
+folder, no group, no section. Nothing on that page can say *these five are the AI project
+and those two are browser extensions*.
+
+<p align="center">
+  <img src="docs/media/08-flat-list-before.jpg" alt="GitHub's flat Repositories list" width="880">
+</p>
+
+The label system already exists. **Topics** &mdash; repo &rarr; About &rarr; &#9881; &rarr; Topics
+&mdash; are free-form, unlimited, editable in two clicks, and already attached to the right
+object. GitHub simply never renders a view that groups by them.
+
+**SHELVES is that view.**
+
+<p align="center">
+  <img src="docs/media/01-the-whole-map.png" alt="78 repositories as six collapsible shelves" width="880">
+</p>
+
+Same page, same rows, same GitHub markup. Every shelf carries a hue and a glyph, so eight
+shelves are one glance instead of eight reading tasks. Open one and your repositories are
+underneath, exactly as GitHub rendered them.
+
+<p align="center">
+  <img src="docs/media/02-shelves-open.png" alt="Shelves expanded in compact mode" width="880">
+</p>
+
+Then it does things the page cannot: `/` searches **descriptions, topics, languages,
+licences and READMEs**; every row carries a **private note**; a shelf can be a **question**
+(`Java = lang:java fork:false`); and **audit** reads your whole collection back to you.
+
+It is a **lens, not an editor**. It never writes to your GitHub account, it talks to
+exactly two hosts, and nothing it learns leaves your browser.
+
+---
+
+> [!TIP]
+> Every section below with a **&#9656;** is collapsed. Click to open it &mdash; the same
+> gesture the extension itself is built on.
 
 ---
 
@@ -97,7 +106,9 @@ first frame from the topic chips already on the rows plus whatever the cache
 holds — **341 ms**, against 1 178 ms when the cache is cold — and re-shelves
 itself when the ladder answers. See *the first frame*, below.
 
-### Tag some repos first
+<details>
+<summary><b>Tag some repos first</b> &mdash; SHELVES groups by topic, so a repo with no topics has nothing to group by</summary>
+<br>
 
 SHELVES groups by topic, so a repo with no topics has nothing to group by. On
 any repo: **About** (right sidebar) → ⚙ gear → **Topics** → type a label →
@@ -107,7 +118,11 @@ Enter → **Save changes**. GitHub lowercases them, so `AiProject` becomes
 SHELVES will never do that for you — writing a topic is a write. What it does
 instead is queue the job and hand you the tab: see *the workbench*, below.
 
-### Before you have tagged anything
+</details>
+
+<details>
+<summary><b>Before you have tagged anything</b> &mdash; suggested shelves, a one-tab-at-a-time walk, and moving repos by hand &mdash; none of which writes to GitHub</summary>
+<br>
 
 An account that has never used topics gets back the page it already had: one
 shelf called Ungrouped holding everything. On the profile this was last measured
@@ -157,7 +172,11 @@ hand is off the leftovers shelf and still untagged, and still worth tagging.
 Your place in the queue is remembered per profile, so this is a chore you can
 leave and come back to.
 
-### Choose your shelves
+</details>
+
+<details>
+<summary><b>Choose your shelves</b> &mdash; the options page: your shelf list, private repos, behaviour</summary>
+<br>
 
 Click the extension's icon (or `chrome://extensions` → *Details* → *Extension
 options*):
@@ -174,7 +193,28 @@ options*):
   (`scrapeMax`, 100) are defaults in `src/store.js` and are not on this page
   yet; the ceiling has a button on the toolbar instead.
 
-### A shelf that is a question
+</details>
+
+---
+
+## A shelf can be a question
+
+A shelf's name is normally a topic, matched literally. Put an `=` in the entry and the left
+half is the name, the right half is the membership:
+
+```
+Live Python = topic:ai lang:python fork:false pushed:<90d
+Java        = lang:java fork:false
+Old Guard   = pushed:>2y
+config
+```
+
+Thirteen fields, all `AND`-ed, `-` to negate, parsed **once per page** against records
+already read &mdash; no request, no index, and no second axis.
+
+<details>
+<summary><b>A shelf that is a question</b> &mdash; the full grammar, and the three rules a rule shelf keeps so it cannot lie to you</summary>
+<br>
 
 A shelf's name is normally a topic, matched literally, and for a well-tagged
 collection that is the whole answer. It cannot express the shelf people
@@ -252,7 +292,11 @@ repo as `unjudged` rather than answering "none", which is the difference between
 *you have no Python* and *nobody could look*. A token moves those repos to the
 API, which does carry both.
 
-### What a shelf is worth
+</details>
+
+<details>
+<summary><b>What a shelf is worth</b> &mdash; stars, stale count, and <code>N since you were here</code> &mdash; the one thing GitHub cannot tell you</summary>
+<br>
 
 The header used to carry a count. The records to say more were already read —
 one repo page gives up ten fields — so it now carries three more things (and a
@@ -282,7 +326,11 @@ would be a statement about your collection when it is a statement about the
 source that answered. That is the same test the audit uses to decide a
 denominator, and it is now the same table.
 
-### The shelves a row also matched
+</details>
+
+<details>
+<summary><b>The shelves a row also matched</b> &mdash; first match wins the row; the rest come back as chips that cost no height</summary>
+<br>
 
 First match wins the row, and it has to: a repo on two shelves is two counts
 that do not add up and a list you cannot scan once. But what that rule throws
@@ -299,7 +347,17 @@ quietly become a second way to write an override.
 Auto-grouping draws none of them. With no shelves configured there is one shelf
 per topic, so every chip would be a restatement of the row.
 
-### Find anything (`/`)
+</details>
+
+---
+
+## The page as an instrument
+
+### Find anything
+
+<p align="center">
+  <img src="docs/media/03-find.png" alt="Searching python: 8 of 78, per-shelf hit counts, empty shelves dimmed" width="880">
+</p>
 
 Press `/` anywhere on the page — or click the box in the toolbar — and type.
 It matches the repo's **name, description, topics, language, licence, the
@@ -340,7 +398,9 @@ listener fires first — measured, our `/` was opening GitHub's quick-search
 overlay on top of the page. The map is registered in the capture phase and stops
 the key there.
 
-### One line per repository
+<details>
+<summary><b>One line per repository</b> &mdash; 109px &rarr; 41px per row; nine rows on a screen &rarr; twenty-four</summary>
+<br>
 
 Press **compact** in the toolbar. GitHub draws a repository row 109px tall —
 24px of padding either side of a heading, a description it may not have, a topic
@@ -359,7 +419,13 @@ The choice is remembered **per profile**, in this browser only. It deliberately
 does not sync: the right density depends on the screen, and a 27-inch monitor's
 answer is the wrong one on a laptop.
 
+</details>
+
 ### A private margin
+
+<p align="center">
+  <img src="docs/media/06-private-margin.png" alt="A private note painted under a repository row" width="880">
+</p>
 
 Hover any row and a small `✎ note` appears. Write anything: *"the one with the
 broken deploy"*, *"client wants this back in March"*. `Enter` saves,
@@ -374,6 +440,10 @@ charter states as the single exception to principle I.
 Press **Save**. The GitHub tab reloads itself.
 
 ### Put a repo on a shelf yourself
+
+<p align="center">
+  <img src="docs/media/05-move-and-pin.png" alt="The grip menu, with pin to top as its first entry" width="880">
+</p>
 
 Some repos will never carry a topic, and some carry one that says the wrong
 thing. Hover a row and a grip `⠿` appears in the note margin beside the pencil:
@@ -425,7 +495,9 @@ overrides, and like them *rescan* and *clear topic cache* leave them strictly
 alone — no request can re-derive which three repositories matter to you this
 month. Those three are the whole of that category.
 
-### Shelf identity — a colour and a glyph
+<details>
+<summary><b>Shelf identity</b> &mdash; a colour and a glyph: twelve hues and twelve glyphs, walked independently, measured for tofu and for contrast on both themes</summary>
+<br>
 
 Every shelf gets a hue and a shape, so eight shelves are one glance instead of
 eight reading tasks.
@@ -464,7 +536,13 @@ now solves for its own lightness and clears **4.3:1 against both** `#ffffff` and
 `#0d1117`, with no theme detection anywhere. See `tests/identity.html` and
 `tests/glyph-probe.html`.
 
+</details>
+
 ### Audit
+
+<p align="center">
+  <img src="docs/media/04-audit.png" alt="The audit panel: topic findings above, repository gaps below, with honest denominators" width="880">
+</p>
 
 Press **audit** in the toolbar. It opens one panel with two sections, because
 they are two questions about one collection: what is wrong with your **topics**,
@@ -530,6 +608,10 @@ it that had been invisible.
 
 ### The mark on a repo's own page
 
+<p align="center">
+  <img src="docs/media/07-repo-page-mark.png" alt="The shelf chip and private note at the top of a repository's About sidebar" width="880">
+</p>
+
 Open any of your repositories and a chip sits at the top of the About sidebar:
 the shelf's glyph, its name in its colour, the shelf's size, and a link back to
 the shelves. Your private note comes with it, editable right there — which is
@@ -549,7 +631,36 @@ shelves, and you are auto-grouping) the chip still names the shelf and simply
 **declines to claim a colour**. A mark that disagrees with the shelves would be
 worse than no mark.
 
-### Where the topics come from
+---
+
+## How it gets the topics
+
+Four rungs, climbed from free to expensive, stopping the moment every repository is
+answered. **Rung 1 is a floor, not an answer** &mdash; what the page gives up for free is
+kept, and every repo it did not name still climbs.
+
+```mermaid
+flowchart TD
+    R1["<b>rung 1</b> · topic chips already in the page<br/><i>free — no request</i>"]
+    R2["<b>rung 2</b> · api.github.com with your token<br/><i>one request per 100 repos — sees private</i>"]
+    R3["<b>rung 3</b> · api.github.com without one<br/><i>same cost — public repositories only</i>"]
+    R4["<b>rung 4</b> · each remaining repository page<br/><i>one request each — sees private — capped at 100</i>"]
+    D(["every repository answered — shelved"])
+    R1 -->|"repos still unanswered"| R2
+    R2 -->|"repos still unanswered"| R3
+    R3 -->|"repos still unanswered"| R4
+    R4 --> D
+```
+
+The toolbar names **the rungs that contributed**, never just the first one &mdash;
+`via page + api (public) + repo pages (cached)`. And you do not wait it out looking at the
+flat list: the page is shelved in the **first frame** from the chips plus whatever the cache
+holds, measured at **341 ms** against 1 178 ms on a cold cache, then re-buckets itself when
+the ladder answers.
+
+<details>
+<summary><b>Where the topics come from</b> &mdash; the four rungs in full, why rung 1 had to become a floor, and the ceiling on rung 4</summary>
+<br>
 
 Four rungs, climbed from free to expensive, stopping the moment every repo is
 answered:
@@ -594,7 +705,11 @@ and failed, and its cure is *rescan*. And it is not drawn as a warning, because
 nothing went wrong — a limit you can lift is a choice offered, and filing it
 beside `token rejected` would teach you to read a choice as a fault.
 
-### The first frame, before the ladder answers
+</details>
+
+<details>
+<summary><b>The first frame, before the ladder answers</b> &mdash; 341 ms to a usable page, corrected rather than redrawn &mdash; and why none of it is written down</summary>
+<br>
 
 A cold run is one request per repository, and until it finishes you would be
 looking at the flat list you opened the page to get away from. Two sources cost
@@ -623,7 +738,11 @@ read from their own pages — the private ones the API cannot see — so an acco
 the API answers in one call has nothing cached, skips this, and loses nothing
 by it.
 
-### GitHub's own filters
+</details>
+
+<details>
+<summary><b>GitHub's own filters</b> &mdash; Type and Language swap the rows underneath us; the answer and what you typed both survive it</summary>
+<br>
 
 The **Find a repository** box beside the shelves is GitHub's and still theirs:
 it is a server-side search, and nothing here touches it.
@@ -649,7 +768,11 @@ that silently means something else is worse than no filter.
 The memory lives only in the page, so it dies when the tab does: a reload reads
 the ladder again, and *rescan* is unaffected by it.
 
-### Keeping the cache warm (off by default)
+</details>
+
+<details>
+<summary><b>Keeping the cache warm (off by default)</b> &mdash; opt-in, one at a time, never on your Repositories tab, stops dead on the first refusal</summary>
+<br>
 
 A first run that reaches rung 4 is ten to twenty seconds of fetching, and the
 cache expires, so it comes back every week. Turn on **Keep the cache warm in the
@@ -671,7 +794,11 @@ throttled.
 It refreshes what it has already seen and never discovers. A first run is still
 cold; the point is that the second week is not.
 
-### On other people's profiles
+</details>
+
+<details>
+<summary><b>On other people's profiles</b> &mdash; free rungs only, no token, no scraping, and every verb that would write your setup is simply not drawn</summary>
+<br>
 
 The shelves work on anyone's Repositories tab, but on a profile that is not
 yours they use the **free rungs only**: topic chips already in the page, plus
@@ -695,7 +822,11 @@ profile that is not yours there is no suggestions strip, no walk and no grip.
 The reading half is untouched: the page is still shelved, still searchable and
 still audited.
 
-### When GitHub's page moves
+</details>
+
+<details>
+<summary><b>When GitHub's page moves</b> &mdash; a moved selector is said out loud rather than silently absorbed &mdash; and below five pages read, there is deliberately no opinion</summary>
+<br>
 
 The repo page will be restructured eventually, and today that failure would be
 silent: selectors return blanks, descriptions vanish, and the toolbar goes on
@@ -720,7 +851,19 @@ reason rung 1 had to become a floor: a run that stopped at the chips read no
 page at all, so the run that would have noticed the sidebar moving was the run
 that never happened.
 
-### The optional token
+</details>
+
+> [!WARNING]
+> **Do not paste a classic personal access token.** Its finest grain is `repo`, which can
+> *write* to every repository you own. SHELVES would never use a byte of that &mdash; which is
+> the problem: you would be storing a key to your whole account, unencrypted in a browser
+> profile, to save one request per repository. Use a fine-grained token with
+> **Metadata: Read-only** and every other permission set to *No access*: the weakest
+> credential GitHub can mint.
+
+<details>
+<summary><b>The optional token</b> &mdash; how to mint the right one in five steps, and what a rejected one does instead</summary>
+<br>
 
 Without a token, private repos' topics are read from your own repo pages using
 the session you are already signed in with — one request per repo, up to the
@@ -759,9 +902,180 @@ request: it named a rung that had not run, and every repo fell through as
 missing, which turned one dead credential into a page that read every
 repository you own, one at a time.
 
+</details>
+
 ---
 
-## Running the tests
+## Trust and your data
+
+> [!IMPORTANT]
+> **It never writes to your GitHub account.** Not a topic, not a description, not a star.
+> It contacts exactly two hosts &mdash; `github.com` and `api.github.com` &mdash; and there is no
+> other network call of any kind in the codebase, and no server anywhere.
+
+> [!CAUTION]
+> **It does keep things locally, unencrypted.** Repository names (private ones included),
+> descriptions, README openings, your notes, your overrides and your pins all live in this
+> browser profile. MV3 offers no encrypted store, so that is inherent rather than chosen.
+> **Anyone who can read this browser profile can read all of it.** Worth weighing before you
+> install it on a shared machine.
+
+<details>
+<summary><b>Security</b> &mdash; what the risks actually are. Every risk follows from one fact: this is a content script with your GitHub session</summary>
+<br>
+
+Every risk here follows from one fact: this is a content script with your
+GitHub session, and everything it keeps is on your disk.
+
+**Everything is at rest, unencrypted, in your browser profile.** That is the
+big one and it is inherent to extensions, not a defect: `chrome.storage.local`
+is a file. It holds the token if you added one, your notes, your overrides,
+your pins, a fact cache containing **private repository names and the opening
+of their READMEs**, and a shelf map recording which shelf each of your repos is
+on. Anyone with access to that profile reads all of it. If you share a machine,
+that is the sentence to weigh. Uninstalling removes it; so does *Clear topic
+cache* for the derived half.
+
+**It runs on every github.com page you visit** — the whole origin, minus eight
+excluded routes (`/settings/*`, `/login*`, `/sessions/*` and friends). It has
+to: the shelf mark lives on repository pages. It means any parsing bug ships to
+every page you open, including private repositories, which is why the row
+parsers are structural and why `redteam.js` exists.
+
+**A token is optional and its scope is the whole risk.** See *The optional
+token* above: fine-grained, `Metadata: Read-only`, never a classic `repo` one.
+
+**An export is a file with your private repository names in it.** That is the
+price of being able to move your notes to another machine; the options page
+says so beside the button.
+
+What is *not* a risk, checked rather than asserted — `node tests/redteam.js`,
+533 probes across six plugins:
+
+- no name from a page can steer a request off `github.com`, through either
+  sink that builds a URL by concatenation
+- nothing in the extension names a host other than `github.com` and
+  `api.github.com`; there is no `eval`, no `new Function`, and **no HTML sink
+  anywhere in what ships** — every string from a page reaches the DOM as text
+- no group entry, however long, takes more than linear time to parse
+- a corrupt or hostile local store costs grouping, never sense, and no key from
+  a file can reach `Object.prototype`
+- the manifest asks for one permission (`storage`) and two hosts, declares
+  nothing web-accessible, and lets no page talk to the extension
+
+The searching half of that is the point, not the passing half. Two findings
+from its first run are fixed and in the scars — and so is the fact that two of
+its own probes were silently dead, because `` is a valid escape in Python and
+became a backspace byte.
+
+</details>
+
+<details>
+<summary><b>Getting your own work out</b> &mdash; export and import the three things nothing can rebuild &mdash; merging, never overwriting</summary>
+<br>
+
+Your **notes**, the repos you put on a shelf **by hand**, and your **pins** are
+the only things here nothing can rebuild — no rescan re-derives a sentence you
+wrote. They live in `chrome.storage.local` and nowhere else, deliberately:
+they are too big for synced storage, and a credential's neighbours do not
+belong there either. Which also means a profile reset, a new laptop or one
+mis-click on *Remove extension* takes all three.
+
+Options → **Your own work** → *Export…* writes them to a JSON file. *Import…*
+reads one back.
+
+Two things about it, both deliberate:
+
+- **It merges, and the incumbent wins.** Where both sides know a repository,
+  the note already in this browser stays. Importing is what you do when you are
+  worried about losing something, and a silent overwrite of the sentence you
+  wrote this morning is the one unrecoverable thing this extension could do.
+  The result is counted — `12 added, 3 already here and left alone` — so
+  "nothing happened" and "you already had all of it" are different sentences.
+- **The token is not in it.** The file is something you are invited to move
+  between machines; a credential is not.
+
+A file is the most untrusted input SHELVES takes — the only one that does not
+arrive through GitHub — so a key that does not name a repository, or a value of
+the wrong shape, is refused and counted rather than stored. `redteam.js`'s
+`import` plugin is that assertion.
+
+</details>
+
+<details>
+<summary><b>What it stores</b> &mdash; the complete inventory, key by key, including what sits in <code>localStorage</code> rather than the extension's own store</summary>
+<br>
+
+In your browser profile, unencrypted, via `chrome.storage.local`:
+
+- **the fact cache** — for every repo including private ones: name, description,
+  language, stars, forks, licence, homepage, last-touched, and the README's
+  first 400 characters
+- **your notes** — one of the three things here that nothing can rebuild
+- **your overrides** (`overrides`) — the repos you put on a shelf by hand,
+  keyed `owner/name`. The second thing nothing can rebuild
+- **your pins** (`pins`) — the repos you sent to the top of their shelf, keyed
+  `owner/name`, as `{ "owner/name": true }`. The third, and the last: no
+  request re-derives which repositories matter to you this month
+- **the shelf map** — your shelf names, their counts, and your repo names
+- **the token**, if you added one — `local` and never `sync`, so it does not
+  travel between machines
+
+Your shelf list itself — including any suggestion you accepted — is your
+configuration and lives in `chrome.storage.sync`, with the rest of the options.
+
+Entries are pruned once they have been untouched for four cache lifetimes (at
+least 90 days), and the cache is capped at 3 000 repos. **Clear topic cache** in
+options empties it now; your notes, your overrides and your pins are never
+touched by it.
+
+Three smaller kinds of thing sit outside all of that, in this browser's own
+storage for github.com rather than in the extension's:
+
+- `shelves:open:<owner>`, `shelves:bench:<owner>` and
+  `shelves:density:<owner>` in `localStorage` — which shelves you left open,
+  how far through the untagged repos the workbench has walked, and whether you
+  read this profile `compact` or `roomy`. All three are places or postures
+  rather than decisions: losing one costs you a scroll, a repeat of a tab you
+  already closed, or one press of a button. Density is here rather than in the
+  synced settings on purpose — the right density depends on the screen you are
+  reading on
+- `shelves:seen:<owner>` in `localStorage` — when you last opened this profile's
+  Repositories tab, which is what `N since you were here` on a shelf header is
+  measured from. Read and written **once per visit**, per profile, and
+  deliberately never synced: *since you were last here* would otherwise mean
+  *since you were last here on any of four machines*, which is not a sentence
+  anyone wants. Losing it costs one visit's worth of that count and nothing else
+- pressing `read N more` writes a single flag to `sessionStorage`, which the next
+  load reads and deletes. It is not a setting — it is a decision about this tab,
+  taken once — so it never syncs and a reload cannot silently repeat a large read
+  you authorised once
+
+None of this ever leaves the browser — but anyone who can read your browser
+profile can read all of it, including private repository names and whatever you
+wrote in your notes. MV3 has no encrypted store, so that is inherent rather than
+a choice. Worth knowing before installing on a shared machine.
+
+</details>
+
+---
+
+## Development
+
+No build step. The folder in this repo is the folder the browser loads.
+
+```bash
+cd tests
+npm install                     # jsdom, once — the extension itself has no dependencies
+node harness.js                 # all 39 scenarios
+node harness.js ladder-floor    # just that one
+
+node redteam.js                 # 533 adversarial probes, six plugins
+```
+
+<details>
+<summary><b>Running the tests</b> &mdash; 39 scenarios driving the real content scripts and the real service worker against a jsdom GitHub</summary>
+<br>
 
 ```
 cd tests
@@ -777,7 +1091,11 @@ node redteam.js settings        # one plugin, by keyword
 Thirty-nine scenarios drive the real content scripts and the real service
 worker against a jsdom GitHub.
 
-### The red team
+</details>
+
+<details>
+<summary><b>The red team</b> &mdash; <code>harness.js</code> asserts the product does what it claims; <code>redteam.js</code> asserts hostile input cannot make it do anything else</summary>
+<br>
 
 `harness.js` asserts that the product does what it claims. `redteam.js` asserts
 that hostile input cannot make it do anything else — and the two are different
@@ -954,9 +1272,11 @@ Assertions are on counts and membership, never on "it did not throw".
 **The harness cannot judge layout or event semantics.** After a change that
 touches either, load it unpacked and look at the real page.
 
----
+</details>
 
-## Layout
+<details>
+<summary><b>Layout</b> &mdash; every file in the tree, and what it owns</summary>
+<br>
 
 ```
 shelves/
@@ -995,133 +1315,15 @@ Read `CHARTER.md` before changing anything in `src/`. It carries ten principles
 and seven facts that were established by measurement — several of the odder
 lines in the code are load-bearing, and the charter is where the reasons live.
 
+</details>
+
+> [!NOTE]
+> **The harness cannot judge layout or event semantics.** `tests/row-layout.html`,
+> `identity.html`, `glyph-probe.html` and `mark.html` are photographed in a real browser,
+> and `row-height.py` drives the unpacked extension against a real profile. jsdom computes
+> no layout and cannot tell a shape from the missing-glyph box.
+
 ---
-
-## Security — what the risks actually are
-
-Every risk here follows from one fact: this is a content script with your
-GitHub session, and everything it keeps is on your disk.
-
-**Everything is at rest, unencrypted, in your browser profile.** That is the
-big one and it is inherent to extensions, not a defect: `chrome.storage.local`
-is a file. It holds the token if you added one, your notes, your overrides,
-your pins, a fact cache containing **private repository names and the opening
-of their READMEs**, and a shelf map recording which shelf each of your repos is
-on. Anyone with access to that profile reads all of it. If you share a machine,
-that is the sentence to weigh. Uninstalling removes it; so does *Clear topic
-cache* for the derived half.
-
-**It runs on every github.com page you visit** — the whole origin, minus eight
-excluded routes (`/settings/*`, `/login*`, `/sessions/*` and friends). It has
-to: the shelf mark lives on repository pages. It means any parsing bug ships to
-every page you open, including private repositories, which is why the row
-parsers are structural and why `redteam.js` exists.
-
-**A token is optional and its scope is the whole risk.** See *The optional
-token* above: fine-grained, `Metadata: Read-only`, never a classic `repo` one.
-
-**An export is a file with your private repository names in it.** That is the
-price of being able to move your notes to another machine; the options page
-says so beside the button.
-
-What is *not* a risk, checked rather than asserted — `node tests/redteam.js`,
-533 probes across six plugins:
-
-- no name from a page can steer a request off `github.com`, through either
-  sink that builds a URL by concatenation
-- nothing in the extension names a host other than `github.com` and
-  `api.github.com`; there is no `eval`, no `new Function`, and **no HTML sink
-  anywhere in what ships** — every string from a page reaches the DOM as text
-- no group entry, however long, takes more than linear time to parse
-- a corrupt or hostile local store costs grouping, never sense, and no key from
-  a file can reach `Object.prototype`
-- the manifest asks for one permission (`storage`) and two hosts, declares
-  nothing web-accessible, and lets no page talk to the extension
-
-The searching half of that is the point, not the passing half. Two findings
-from its first run are fixed and in the scars — and so is the fact that two of
-its own probes were silently dead, because `` is a valid escape in Python and
-became a backspace byte.
-
-## Getting your own work out
-
-Your **notes**, the repos you put on a shelf **by hand**, and your **pins** are
-the only things here nothing can rebuild — no rescan re-derives a sentence you
-wrote. They live in `chrome.storage.local` and nowhere else, deliberately:
-they are too big for synced storage, and a credential's neighbours do not
-belong there either. Which also means a profile reset, a new laptop or one
-mis-click on *Remove extension* takes all three.
-
-Options → **Your own work** → *Export…* writes them to a JSON file. *Import…*
-reads one back.
-
-Two things about it, both deliberate:
-
-- **It merges, and the incumbent wins.** Where both sides know a repository,
-  the note already in this browser stays. Importing is what you do when you are
-  worried about losing something, and a silent overwrite of the sentence you
-  wrote this morning is the one unrecoverable thing this extension could do.
-  The result is counted — `12 added, 3 already here and left alone` — so
-  "nothing happened" and "you already had all of it" are different sentences.
-- **The token is not in it.** The file is something you are invited to move
-  between machines; a credential is not.
-
-A file is the most untrusted input SHELVES takes — the only one that does not
-arrive through GitHub — so a key that does not name a repository, or a value of
-the wrong shape, is refused and counted rather than stored. `redteam.js`'s
-`import` plugin is that assertion.
-
-## What it stores
-
-In your browser profile, unencrypted, via `chrome.storage.local`:
-
-- **the fact cache** — for every repo including private ones: name, description,
-  language, stars, forks, licence, homepage, last-touched, and the README's
-  first 400 characters
-- **your notes** — one of the three things here that nothing can rebuild
-- **your overrides** (`overrides`) — the repos you put on a shelf by hand,
-  keyed `owner/name`. The second thing nothing can rebuild
-- **your pins** (`pins`) — the repos you sent to the top of their shelf, keyed
-  `owner/name`, as `{ "owner/name": true }`. The third, and the last: no
-  request re-derives which repositories matter to you this month
-- **the shelf map** — your shelf names, their counts, and your repo names
-- **the token**, if you added one — `local` and never `sync`, so it does not
-  travel between machines
-
-Your shelf list itself — including any suggestion you accepted — is your
-configuration and lives in `chrome.storage.sync`, with the rest of the options.
-
-Entries are pruned once they have been untouched for four cache lifetimes (at
-least 90 days), and the cache is capped at 3 000 repos. **Clear topic cache** in
-options empties it now; your notes, your overrides and your pins are never
-touched by it.
-
-Three smaller kinds of thing sit outside all of that, in this browser's own
-storage for github.com rather than in the extension's:
-
-- `shelves:open:<owner>`, `shelves:bench:<owner>` and
-  `shelves:density:<owner>` in `localStorage` — which shelves you left open,
-  how far through the untagged repos the workbench has walked, and whether you
-  read this profile `compact` or `roomy`. All three are places or postures
-  rather than decisions: losing one costs you a scroll, a repeat of a tab you
-  already closed, or one press of a button. Density is here rather than in the
-  synced settings on purpose — the right density depends on the screen you are
-  reading on
-- `shelves:seen:<owner>` in `localStorage` — when you last opened this profile's
-  Repositories tab, which is what `N since you were here` on a shelf header is
-  measured from. Read and written **once per visit**, per profile, and
-  deliberately never synced: *since you were last here* would otherwise mean
-  *since you were last here on any of four machines*, which is not a sentence
-  anyone wants. Losing it costs one visit's worth of that count and nothing else
-- pressing `read N more` writes a single flag to `sessionStorage`, which the next
-  load reads and deletes. It is not a setting — it is a decision about this tab,
-  taken once — so it never syncs and a reload cannot silently repeat a large read
-  you authorised once
-
-None of this ever leaves the browser — but anyone who can read your browser
-profile can read all of it, including private repository names and whatever you
-wrote in your notes. MV3 has no encrypted store, so that is inherent rather than
-a choice. Worth knowing before installing on a shared machine.
 
 ## Known limits
 
@@ -1157,6 +1359,8 @@ a choice. Worth knowing before installing on a shared machine.
   the selectors in `src/dom.js` are the single place to look — that is why they
   live in one file.
 
+---
+
 ## Troubleshooting
 
 | What you see | What it means |
@@ -1189,3 +1393,12 @@ a choice. Worth knowing before installing on a shared machine.
 | the toolbar says `· not yours` | you are on someone else's profile; only the free rungs run there, on purpose |
 | the toolbar says `N unread` | GitHub refused some repo-page reads — often a rate limit. Press **rescan** in a few minutes. Repos the ceiling deferred are never counted here: they were not tried, and their cure is the button, not a rescan |
 | the toolbar says GitHub's page changed shape | it probably has. `facts.js` owns every repo-page selector; nothing else needs looking at |
+
+---
+
+<div align="center">
+<sub>
+MIT &nbsp;&middot;&nbsp; <a href="CHARTER.md">CHARTER.md</a> carries the principles and the measured facts &mdash;
+read it before changing anything in <code>src/</code> &nbsp;&middot;&nbsp; <a href="ROADMAP.md">ROADMAP.md</a> is what is next
+</sub>
+</div>
