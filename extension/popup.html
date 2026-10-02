@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Shelves — status</title>
+    <style>
+      /* A POPUP IS NEVER A PAGE. options.html widens itself past 700px because
+         it is also the options page; this surface has one width, 340px, which
+         is narrower than the options popup on purpose: it is a readout, not a
+         form. The tokens below are character-for-character the ones in
+         options.html so the two surfaces are visibly one product. */
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1f2328;
+        --muted: #59636e;
+        --line: #d1d9e0;
+        --field: #f6f8fa;
+        --accent: #0969da;
+        --warn: #9a6700;
+        --ok: #1a7f37;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d1117;
+          --fg: #e6edf3;
+          --muted: #8b949e;
+          --line: #30363d;
+          --field: #161b22;
+          --accent: #4493f8;
+          --warn: #d29922;
+          --ok: #3fb950;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        width: 340px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.5 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+      }
+      .head {
+        display: flex; align-items: baseline; gap: 8px;
+        padding: 10px 14px; border-bottom: 1px solid var(--line);
+      }
+      .head h1 {
+        margin: 0; flex: 1 1 auto;
+        font-size: 11px; font-weight: 600; letter-spacing: .12em;
+        text-transform: uppercase;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: var(--muted);
+      }
+      .chip {
+        flex: 0 0 auto; font-size: 11px; color: var(--muted);
+        display: flex; align-items: center; gap: 5px; text-align: right;
+      }
+      .chip .dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--muted); flex: none;
+      }
+      .chip.ok { color: var(--ok); }
+      .chip.ok .dot { background: var(--ok); }
+      .chip.warn { color: var(--warn); }
+      .chip.warn .dot { background: var(--warn); }
+
+      .body { padding: 12px 14px; }
+      p.lede { margin: 0 0 10px; color: var(--muted); }
+      p.lede:last-child { margin-bottom: 0; }
+
+      /* THE ANSWER ABOUT THE PAGE YOU ARE ON OUTRANKS THE PANEL BELOW IT.
+       * The first version drew the last run at full confidence under a muted
+       * one-line caveat, and a reader on someone else's repository read the
+       * numbers and took them for this page — which is exactly what the caveat
+       * was there to prevent. Weight is what says "this is the answer"; a
+       * sentence in the same grey as everything else does not. */
+      p.lede.now { color: var(--fg); font-size: 14px; margin-bottom: 12px; }
+
+      /* And what follows it is demoted rather than deleted: still the honest
+       * "is this thing working" readout, just plainly labelled as elsewhere. */
+      .sep {
+        display: flex; align-items: center; gap: 8px;
+        margin: 14px 0 8px; color: var(--muted);
+        font: 600 10px/1 ui-monospace, "Cascadia Mono", Consolas, monospace;
+        text-transform: uppercase; letter-spacing: .08em;
+      }
+      .sep::after {
+        content: ""; flex: 1; height: 1px; background: var(--line);
+      }
+      dl.panel.demoted dd { color: var(--muted); }
+
+      /* ── THE MARK ─────────────────────────────────────────────────────────
+       * The same chip mark.js prepends to a repository's About sidebar, at the
+       * same anatomy: the glyph in the shelf's own hue, a 3px left edge in it,
+       * the label, the size. Drawn here so that a reader who clicks the icon
+       * on a repository page and a reader who looks at the sidebar are told the
+       * same thing in the same shape — the identity is a hash of the shelf's
+       * name, so it is literally the same colour in both places. */
+      .mark {
+        display: inline-flex; align-items: center; gap: 6px;
+        max-width: 100%; margin: 0 0 10px;
+        padding: 3px 10px 3px 8px; border-radius: 2em;
+        border: 1px solid hsla(var(--sh-hue), var(--sh-sat), var(--sh-lit), .65);
+        border-left: 3px solid hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+        background: var(--field);
+      }
+      .mark .g { flex: none; font-size: 10px; line-height: 1;
+                 color: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit)); }
+      .mark .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+      .mark .c { color: var(--muted); font-variant-numeric: tabular-nums; }
+      .mark.plain { border-color: var(--line); border-left-color: var(--line); }
+      .mark.plain .g { color: var(--muted); }
+
+      /* ── THE STRIP ────────────────────────────────────────────────────────
+       * The shelves themselves, which the panel never showed. `order` and
+       * `counts` were already in the record and only ever read as the number
+       * 12; drawn instead they are the SHAPE of the collection, and the bar is
+       * the half a figure cannot say — that 289 of 330 are in Ungrouped is the
+       * whole argument for tagging, and it reads in one glance rather than in
+       * two numbers the reader has to divide. The bar is linear and the
+       * remainder is allowed to dwarf everything: that is the true picture. */
+      .strip { display: grid; gap: 3px; margin-top: 2px; }
+      .shelf {
+        display: grid; grid-template-columns: 12px minmax(0, 1fr) 72px 4ch;
+        align-items: center; gap: 8px;
+      }
+      .shelf .g {
+        font-size: 10px; line-height: 1; text-align: center;
+        color: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+      }
+      .shelf.plain .g { color: var(--muted); }
+      .shelf .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* NO TRACK BEHIND THE BAR. A full-width grey rail read as the bar itself,
+         so a shelf holding 12 of 330 looked full with a sliver of colour in it —
+         the exact opposite of the fact. The bar is drawn on the ground instead,
+         and its LENGTH is the whole statement. */
+      .shelf .bar { height: 6px; }
+      .shelf .bar i {
+        display: block; height: 100%; border-radius: 2px; min-width: 2px;
+        background: hsl(var(--sh-hue), var(--sh-sat), var(--sh-lit));
+      }
+      .shelf.plain .bar i { background: var(--line); outline: 1px solid var(--muted);
+                            outline-offset: -1px; }
+      .shelf .c {
+        color: var(--muted); font-variant-numeric: tabular-nums;
+        font-size: 12px; text-align: right;
+      }
+      .strip .more { color: var(--muted); font-size: 12px; padding-left: 20px; }
+
+      /* ── THE LADDER ───────────────────────────────────────────────────────
+       * Pages read, pages not. The truncation already had a sentence; what it
+       * did not have was the one fact a sentence is bad at — that the unread
+       * part is not a rounding error. Solid blocks are read, dashed are not. */
+      .ladder { display: flex; gap: 2px; flex-wrap: wrap; margin: 0 0 6px; }
+      .ladder i {
+        width: 9px; height: 14px; border-radius: 1px;
+        background: var(--warn); opacity: .85;
+      }
+      .ladder i.lost {
+        background: transparent; opacity: 1;
+        border: 1px dashed var(--warn);
+      }
+
+      /* MEASURED IN A REAL BROWSER, not reasoned about: a flat `76px` first
+         column clipped `ANSWERED BY` to `ANSWERED B…` — 10px mono plus .08em
+         of letter-spacing is wider than it looks, and jsdom cannot tell you
+         that. 76px is therefore the FLOOR and the longest label sets the
+         column, so every value still starts on one shared edge. */
+      dl.panel { margin: 0; display: grid; grid-template-columns: minmax(76px, max-content) 1fr; }
+      dl.panel .r { display: contents; }
+      dl.panel dt {
+        margin: 0 0 6px; padding-right: 8px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 10px; line-height: 20px; letter-spacing: .08em;
+        text-transform: uppercase; color: var(--muted);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      dl.panel dd {
+        margin: 0 0 6px; font-size: 13px; line-height: 20px; color: var(--fg);
+        overflow-wrap: anywhere;
+      }
+      dl.panel dd.num { font-variant-numeric: tabular-nums; }
+
+      /* THE SAME CLASS OF STATEMENT GETS THE SAME SHAPE. Truncation, a rejected
+         token and the canary are all "something upstream is not what we
+         assumed" (see paintNote2 in src/view.js), so they share one block. It
+         carries its own sentence — the colour is never the message. */
+      .flag {
+        border-left: 2px solid var(--warn);
+        padding: 0 0 0 9px; margin: 10px 0 0;
+        color: var(--warn); font-size: 12px;
+      }
+      .flag p { margin: 0; }
+      .flag p + p { margin-top: 3px; }
+
+      .foot {
+        display: flex; align-items: baseline; gap: 10px;
+        padding: 10px 14px; border-top: 1px solid var(--line);
+      }
+      .foot a { color: var(--accent); flex: 1 1 auto; }
+      a { color: var(--accent); }
+      button.link {
+        flex: 0 0 auto;
+        font: inherit; font-size: 12px; color: var(--muted);
+        background: none; border: 0; padding: 0; cursor: pointer;
+        text-decoration: underline;
+      }
+      button.link:hover { color: var(--fg); }
+      a:focus-visible, button:focus-visible {
+        outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="head">
+      <h1>Shelves</h1>
+      <!-- Resolved asynchronously, after a tabs query and a storage read, so
+           the live state is announced rather than silently swapped in. -->
+      <span class="chip" id="chip" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span><span id="chipText">checking…</span>
+      </span>
+    </div>
+
+    <div class="body">
+      <!-- THE MARK IS ABOVE THE SENTENCE, not under it. On a repository
+           page the chip IS the answer; `sep()` appends into #lede, so a
+           mark drawn after it landed below the "last run" rule, under a
+           heading that disowned it. -->
+      <div id="mark"></div>
+      <div id="lede"></div>
+      <dl class="panel" id="panel"></dl>
+      <div id="strip"></div>
+      <div id="flags"></div>
+    </div>
+
+    <div class="foot">
+      <a id="openTab" href="https://github.com/" target="_blank" rel="noopener">Open GitHub</a>
+      <button class="link" id="settings" type="button">Settings</button>
+    </div>
+
+    <!-- src/store.js is the only file that knows chrome.storage exists, and it
+         loads cleanly on an extension page (options.html does the same). dom.js
+         is NOT loaded here: it reads the live document and location, which in a
+         popup are the popup's own. The URL parse it owns is mirrored, with that
+         reason stated, in popup.js. -->
+    <script src="src/store.js"></script>
+    <script src="src/identity.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -50,6 +50,7 @@ globalThis.Shelves = globalThis.Shelves || {};
   const OVER_KEY = "overrides";
   const PIN_KEY = "pins";
   const MAX_FACTS = 3000;   // far above any real account, far below the quota
+  const MAX_THEIRS = 5;     // profiles that are not the reader's, kept at once
 
   const api = () =>
     (typeof chrome !== "undefined" && chrome && chrome.storage) ? chrome.storage : null;
@@ -399,7 +400,15 @@ globalThis.Shelves = globalThis.Shelves || {};
   /* ---- the shelf map: what the profile page worked out, left for the ----
    * ---- pages that cannot work it out for themselves ---------------------
    *
-   * { "<owner>": { at, order: [labels], counts: {label: n}, names: [...] } }
+   * { "<owner>": { at, order: [labels], counts: {label: n},
+   *                on: {"owner/repo": label}, status: {…} } }
+   *
+   * `on` and not `names`: this comment said `names` for as long as the code
+   * wrote a list of every repository here, which was the most sensitive thing
+   * in the store persisted for a feature nobody built. What replaced it
+   * answers the question the repo page actually asks — which shelf am I on —
+   * and the comment is corrected rather than deleted so the next reader can
+   * tell a rename from a field they are failing to find.
    *
    * A repo's OWN page can see its topics but not its neighbours', and the
    * shelf a repo lands on — and, more sharply, the COLOUR that shelf wears —
@@ -411,6 +420,34 @@ globalThis.Shelves = globalThis.Shelves || {};
    * So the profile page writes down what it worked out and the repo page reads
    * it. Derived, disposable and rebuilt on every render, exactly like the fact
    * cache — losing it costs the chip its colour and nothing else.
+   *
+   * `status` IS THE TOOLBAR LINE, WRITTEN DOWN, and it is here for a second
+   * reader with a harder problem than the repo page: the toolbar popup has no
+   * content script, no page and no DOM to count. Anything it shows is either
+   * read from this block or invented, and an invented count that disagrees
+   * with the page is worse than a popup that says nothing — so the page that
+   * knows writes the numbers AND the sentences that qualify them.
+   *
+   * TWO OF THOSE FIELDS ARE DELIBERATELY NULLABLE. `total` is the profile's
+   * own repository count read off GitHub's nav, and it is null whenever it may
+   * not be quoted — under a Type / Language / search filter the counter counts
+   * the collection while the list shows a fraction of it, so "12 of 400" would
+   * state a relationship that does not exist. `unread` is null for the third
+   * state, "there are more and I cannot say how many", which is not the same
+   * claim as 0 and must never be flattened into it: 0 means the page is
+   * complete. A missing number costs one qualifier; a wrong one costs the
+   * reader their reason to believe the numbers beside it.
+   *
+   * `mine` is in there for the same reason the nullable fields are: a
+   * stranger's profile is still shelved, so a record is still written, and a
+   * surface with no DOM cannot tell that record from the reader's own. Keeping
+   * it and labelling it is what lets the popup say the extension stood down;
+   * withholding it would make that indistinguishable from never having opened
+   * the profile at all.
+   *
+   * It is never written from a provisional render — see `publishMap` — so a
+   * popup opened mid-run reads the last completed pass, never the cache's
+   * first draft.
    */
 
   S.shelfmap = {
@@ -424,6 +461,25 @@ globalThis.Shelves = globalThis.Shelves || {};
       const got = await get("local", { [MAP_KEY]: {} });
       const all = (got[MAP_KEY] && typeof got[MAP_KEY] === "object") ? got[MAP_KEY] : {};
       all[String(owner || "").toLowerCase()] = { ...map, at: Date.now() };
+
+      /* PROFILES THAT ARE NOT THE READER'S ARE KEPT, BUT NOT HOARDED.
+       *
+       * A stranger's tab is shelved and therefore recorded, which is what lets
+       * the popup report a page visibly covered in shelves instead of shrugging
+       * at it. The reader's own profiles are a handful and are the point of
+       * this map, so they are never evicted. Other people's are a browsing
+       * history, and a map that grew one permanent entry per profile ever
+       * passed through would be a record of where the reader has been, kept
+       * forever, for a panel that only ever asks about the tab in front of it.
+       *
+       * So the newest few survive and the rest fall off. `mark.js` reads this
+       * map only for a page that passed `isMine()`, so an evicted stranger
+       * costs nothing a re-shelve on the next visit does not already pay. */
+      const theirs = Object.keys(all)
+        .filter((k) => all[k] && all[k].status && all[k].status.mine === false)
+        .sort((a, b) => (all[b].at || 0) - (all[a].at || 0));
+      theirs.slice(MAX_THEIRS).forEach((k) => delete all[k]);
+
       return set("local", { [MAP_KEY]: all });
     },
   };

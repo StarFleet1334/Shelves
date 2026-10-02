@@ -16,10 +16,16 @@ const vm = require("vm");
 const { JSDOM } = require("jsdom");
 
 const EXT = path.join(__dirname, "..", "extension");
-const CONTENT = ["src/store.js", "src/dom.js", "src/facts.js", "src/rule.js",
-                 "src/topics.js",
-                 "src/vocab.js", "src/audit.js", "src/view.js", "src/mark.js",
-                 "src/warm.js", "src/main.js"];
+/* READ FROM THE MANIFEST, NOT RETYPED BESIDE IT. This was a hand-kept copy of
+ * the content_scripts list, and the first file added to the extension after it
+ * was written did what a second list always does: the suite loaded ten scripts
+ * of eleven, every render threw on a missing `S.identity`, and the failure
+ * arrived as a HANG in `settle()` rather than as the one-line "that file is not
+ * loaded" it actually was. The manifest is the only place that knows what
+ * ships, so it is the only place this is written down — a script added to the
+ * extension is now in the harness by virtue of shipping at all. */
+const CONTENT = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"))
+  .content_scripts[0].js;
 
 /* ---- fixtures ---------------------------------------------------------- */
 

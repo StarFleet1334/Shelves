@@ -206,133 +206,13 @@ globalThis.Shelves = globalThis.Shelves || {};
   }
 
   /* ---- shelf identity: a colour and a glyph ------------------------------
-   * Eight shelves told apart only by their text is eight reading tasks. Give
-   * each one a hue and a shape and finding "the one I was in" stops being
-   * reading and becomes recognising — which is most of the difference between
-   * a tool you installed and one you know your way around.
-   *
-   * DERIVED, NEVER STORED. The identity is a hash of the shelf's own name, so
-   * the same shelf is the same colour on every machine, on every load, forever,
-   * with nothing persisted, nothing to migrate and nothing to lose. That is
-   * principle I turned into a feature rather than obeyed as a constraint.
-   *
-   * TWO CHANNELS, AND ONE OF THEM IS SHAPE. A palette alone fails any reader
-   * who cannot separate two of its hues; the glyph carries the SAME slot, so
-   * colour and shape can never disagree and either one alone is enough.
-   *
-   * EVERY HUE CARRIES ITS OWN LIGHTNESS, and that is not fussiness. The first
-   * version used one saturation and one lightness for all twelve, on the
-   * reasoning that tuning it once was tuning it everywhere. Luminance is not a
-   * function of hue at a fixed L: measured in a real browser, blue at 52% came
-   * out at 3.3:1 on the dark theme while yellow at the same 52% came out at
-   * 2.2:1 on the light one. There is no single lightness that serves both
-   * backgrounds for every hue, and this extension deliberately has no theme
-   * detection — it borrows GitHub's palette rather than guessing at one. So
-   * each hue is solved instead for a common relative luminance of 0.19, which
-   * is the band where BOTH sides clear. The whole palette now measures 4.32:1
-   * or better against #0d1117 and 4.37:1 or better against #ffffff, with no
-   * media query and nothing to detect.
-   *
-   * [hue, saturation%, lightness%] */
-  const PALETTE = [
-    [212, 48, 50], [145, 62, 33.5], [32, 84, 38], [275, 64, 59],
-    [340, 82, 51], [178, 62, 32.5], [45, 70, 34], [250, 70, 64.5],
-    [95, 60, 33], [310, 60, 51], [196, 80, 37], [8, 90, 48],
-  ];
-
-  /* EVERY ONE OF THESE WAS MEASURED, NOT CHOSEN. A code point the font stack
-   * lacks renders as the missing-glyph box — which at 10px looks enough like a
-   * hollow square marker to survive being looked at, and shipped exactly that
-   * way: `□` (U+25A1) and, worse, `●` (U+25CF) are both tofu in GitHub's own
-   * font stack on Windows. The probe is tests/glyph-probe.html: render the
-   * candidate and U+FFFF, which is guaranteed to have no glyph anywhere, and
-   * compare widths. Equal width IS the box. These twelve all render, and all
-   * measure 7.9–8.6px, so no shelf name steps sideways to make room for one. */
-  const GLYPHS = ["⬢", "◆", "■", "▲", "★", "▼",
-                  "○", "◇", "◉", "△", "☆", "▽"];
-
-  /** FNV-1a. Math.imul because the multiply overflows double precision, and a
-   *  hash that is quietly wrong is a palette that quietly clusters. */
-  function hash(s) {
-    let h = 2166136261;
-    for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
-    return h >>> 0;
-  }
-
-  /**
-   * @returns {Map<string, {slot: number, hue: ?number, glyph: string}>}
-   *
-   * A HASH ALONE IS NOT ENOUGH. Twelve slots and eight shelves collide better
-   * than nine times in ten — birthday, not intuition — and two shelves wearing
-   * one colour fails at the only job the colour has. So a taken slot walks to
-   * the next free one.
-   *
-   * THE WALK RUNS IN ALPHABETICAL ORDER, NEVER IN DRAWING ORDER. Auto-grouping
-   * sorts shelves by size, so resolving collisions in the order they are drawn
-   * would repaint the map every time a repo moved between two shelves — a
-   * colour that changes under you is worse than no colour. Adding a genuinely
-   * new shelf can still shift one that collides with it, which is the moment
-   * the map is changing anyway.
-   *
-   * The leftovers shelf is deliberately outside the system: it is a remainder,
-   * not an idea, and a colour of its own would claim otherwise.
-   */
-  S.identity = function identity(labels, otherLabel) {
-    const out = new Map();
-    const taken = new Set();   // "hue:glyph" pairs already handed out
-    const hues = new Set();
-    const glyphs = new Set();
-    const n = PALETTE.length;
-    (labels || [])
-      .filter((l) => l && l !== otherLabel)
-      .slice()
-      .sort()
-      .forEach((label) => {
-        /* ── ABOVE TWELVE SHELVES, THE WALK USED TO WRAP AND REPEAT ──────────
-         * The slot was one number for both channels, so once all twelve were
-         * taken the loop ran `n` times, returned to where it started, and
-         * handed out a duplicate — the same hue AND the same glyph. Proved
-         * with sixteen labels: three shelves on slot 11, all `▽`, all one
-         * colour. Both channels failing together is the one thing the
-         * two-channel design exists to prevent, and the README claimed the
-         * opposite as fact.
-         *
-         * It is not a corner case; it is the DEFAULT mode. Auto-grouping makes
-         * one shelf per distinct topic, and `suggest` turns accepting a
-         * thirteenth into one click.
-         *
-         * So hue and glyph become a PAIR, walked independently: 12 x 12 = 144
-         * distinct identities, and the walk only repeats a pair after 144
-         * shelves rather than after 12. The honest cost is stated rather than
-         * hidden: past twelve, ONE channel necessarily repeats — there are
-         * only twelve hues — so two shelves may share a colour, and when they
-         * do the glyph is what tells them apart. That is the two channels
-         * degrading one at a time, which is what they were for. */
-        let slot = hash(label) % n;
-        let g = hash(label + "::glyph") % n;
-        /* EACH CHANNEL IS EXHAUSTED BEFORE EITHER REPEATS. Walking the pair
-         * space directly is enough to keep identities distinct, and it spends
-         * the palette badly: twelve shelves came out wearing eight hues, so
-         * colours started doubling up while four were still unused. Twelve or
-         * fewer must still be twelve distinct hues AND twelve distinct glyphs,
-         * exactly as before — the pair only does any work above that. */
-        if (hues.size < n) for (let i = 0; i < n && hues.has(slot); i++) slot = (slot + 1) % n;
-        if (glyphs.size < n) for (let i = 0; i < n && glyphs.has(g); i++) g = (g + 1) % n;
-        for (let i = 0; i < n * n && taken.has(slot + ":" + g); i++) {
-          g = (g + 1) % n;
-          if (g === 0) slot = (slot + 1) % n;
-        }
-        taken.add(slot + ":" + g);
-        hues.add(slot);
-        glyphs.add(g);
-        const [hue, sat, lit] = PALETTE[slot];
-        out.set(label, { slot, hue, sat, lit, glyph: GLYPHS[g] });
-      });
-    if ((labels || []).indexOf(otherLabel) !== -1) {
-      out.set(otherLabel, { slot: -1, hue: null, sat: null, lit: null, glyph: "·" });
-    }
-    return out;
-  };
+   * MOVED TO src/identity.js, unchanged. The popup is its own document and
+   * cannot load this file — it registers against the live page — but it must
+   * draw the same mark this file does, and two drawings of one shelf that
+   * disagree is the failure the whole identity system exists to prevent. A
+   * pure module is how both get it from one place; storing the resolved hue
+   * in `shelfMap` instead would have made the identity a thing to migrate.
+   * `S.identity` is unchanged and still called from here and from mark.js. */
 
   /** The three numbers onto an element, so the stylesheet owns every use of
    *  them and a solid rule, a tinted border and a chip outline can never drift
@@ -796,7 +676,14 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
 
     host.querySelectorAll("details.sh-shelf").forEach((d) => {
-      const held = [...d.querySelectorAll("li")];
+      /* `li[data-sh-name]`, for the reason `moveRow` already spells out: a
+       * repo row contains a list of its own — GitHub's star menu ships one —
+       * so an unscoped count said `6 / 10` on a five-row shelf with one match.
+       * Both halves of this block were wrong because of it. The denominator
+       * was merely silly; `hits` counted those same nested <li> as matches,
+       * because nothing ever gives them `sh-hide`, so `hits === 0` was
+       * unreachable and a shelf with nothing in it was never dimmed. */
+      const held = [...d.querySelectorAll("li[data-sh-name]")];
       const count = held.length;
       const hits = held.filter((li) => !li.classList.contains("sh-hide")).length;
 
@@ -870,6 +757,21 @@ globalThis.Shelves = globalThis.Shelves || {};
     let warning = ctx.warning;
     let deferred = ctx.deferred;
     let pins = ctx.pins || {};
+    /* ---- the horizon, and why it is NOT in the mutable list above ---------
+     * The extra pages are merged and the nav counter is read before either
+     * render is built, so these are the only facts on the toolbar line that
+     * the ladder cannot revise: rung 4 reads topics, it does not fetch pages.
+     * Making them `const` is therefore a statement rather than a style — a
+     * second pass that could change them would be a second pass that had
+     * fetched rows, and there is nowhere for rows to arrive after `bucket`
+     * has indexed them against `names`.
+     *
+     * `total` is null whenever `repoTotal` refused to claim one (see dom.js),
+     * and `unread` is null for the third state: more exists, uncountable. */
+    const total = (typeof ctx.total === "number") ? ctx.total : null;
+    const unread = ctx.unread === null ? null : (Number(ctx.unread) || 0);
+    const truncated = !!ctx.truncated;
+    const pagesRead = Number(ctx.pagesRead) || 0;
     let { buckets, order, specs, unjudged } =
       S.bucket(rows, topics, settings, names, overrides, facts, { pins });
     const open = S.collapse.read(owner);
@@ -1033,8 +935,18 @@ globalThis.Shelves = globalThis.Shelves || {};
     const paintNote2 = () => {
       note.textContent = "";
       const tagged = topics.filter((t) => t && t.length).length;
-      note.append(rows.length + " repos · " + order.length + " shelves · " +
-                  tagged + " tagged · via " + source);
+      /* QUALIFIED ONLY WHEN THERE IS SOMETHING TO QUALIFY. `330 of 400 repos`
+       * is the honest line for a collection past the fetch ceiling; printing
+       * `400 of 400` on every ordinary profile would teach the reader to skip
+       * the number, and the whole purpose of the form is that it is unusual.
+       * The guard is `>` and not `!==` deliberately: a total BELOW the row
+       * count is GitHub and this page disagreeing, and "330 of 300" is not a
+       * sentence worth printing. */
+      note.append(
+        (total !== null && total > rows.length
+          ? rows.length + " of " + total + " repos"
+          : rows.length + " repos") +
+        " · " + order.length + " shelves · " + tagged + " tagged · via " + source);
       /* A RULE THAT CANNOT BE READ IS SAID OUT LOUD. `lang:python topc:ai` is a
        * typo, and a shelf that silently ignores a third of itself leaves the
        * reader looking at contents they cannot explain — the same class of
@@ -1059,6 +971,29 @@ globalThis.Shelves = globalThis.Shelves || {};
         h.className = "sh-warn sh-canary";
         h.textContent = health;
         note.append(" · ", h);
+      }
+      /* WHAT IS NOT ON THE PAGE AT ALL, said where the other bad news is said.
+       * The merge stops at a ceiling, at a 429, at a page it cannot parse —
+       * and until this sentence existed all three produced a page that looked
+       * complete, because every number on it counted only what we had.
+       *
+       * LAST OF THE FOUR, which is a choice about the other three: a broken
+       * rule, a rejected token and a moved selector are all things the reader
+       * can act on right now, and this one is a property of the collection
+       * being large. It is also the only one that can be true on a completely
+       * healthy run.
+       *
+       * `unread === null` is the case where we know there is more and cannot
+       * count it — no counter to read, or a filtered list whose counter may
+       * not be quoted. "more" is the honest word there; a number would be the
+       * guess `repoTotal` refused to make. */
+      const missing = unread === null ? truncated : unread > 0;
+      if (missing) {
+        const t = document.createElement("span");
+        t.className = "sh-warn";
+        t.textContent = (unread === null ? "more" : String(unread)) +
+          " on pages not read";
+        note.append(" · ", t);
       }
     };
     paintNote2();
@@ -1434,6 +1369,32 @@ globalThis.Shelves = globalThis.Shelves || {};
        * identity the finished page then disagrees with, which is the one
        * failure the map exists to prevent. */
       if (ctx.provisional) return;
+
+      /* A STRANGER'S PROFILE IS SHELVED, SO IT IS WRITTEN DOWN IN FULL.
+       *
+       * This briefly wrote a receipt — `{mine:false}` and nothing else — after
+       * a real leak: a profile passed through one minute ago outranked the
+       * reader's own visit on timestamp, so the popup drew SOMEONE ELSE'S
+       * `99 repos · 3 shelves` under the words "the last profile Shelves
+       * grouped". The figures were the wrong thing to blame. They were correct;
+       * they were attributed to the wrong person, and the fix for a mislabelled
+       * number is a label, not an amputation — `latestOf` in popup.js now
+       * refuses a record that is not the reader's, which is where that bug
+       * actually lived.
+       *
+       * Withholding them cost the reader the answer `topics.js` had already
+       * paid for. Standing on someone else's Repositories tab, the page in
+       * front of them IS grouped — the free rungs run there by design
+       * (topics.js: "a narrowing rather than a refusal") — and a popup that
+       * says only "not yours" about a page visibly covered in shelves is the
+       * surface disagreeing with the page it reports on.
+       *
+       * What the record carries instead is the `source` and `warning` the
+       * ladder itself wrote: `… · not yours` and `free rungs only, N unread`.
+       * That is the honest shape — the figures, and the sentence saying which
+       * rungs were allowed to produce them. `shelfmap.write` caps how many
+       * profiles that are not the reader's may be kept at once. */
+
       /* WHICH SHELF EACH REPO LANDED ON, not just which shelves exist.
        *
        * `names` was written here and read by NOTHING — the most sensitive
@@ -1459,11 +1420,69 @@ globalThis.Shelves = globalThis.Shelves || {};
           if (li.dataset.shName) on[li.dataset.shName] = label;
         });
       });
+      /* ---- AND WHAT THE PAGE KNEW, for the surfaces that cannot look ------
+       * The toolbar popup has no content script and no page: it has this
+       * record and nothing else. Every number it shows is therefore either
+       * written here or invented there, and the second is not an option — a
+       * popup re-deriving `330 of 400` from a row count it cannot see would be
+       * two halves of one extension disagreeing in public.
+       *
+       * So the status block is the toolbar line, written down. It carries the
+       * figures AND the two sentences, because "41 tagged" without "token
+       * rejected (401)" beside it is a number whose explanation was dropped on
+       * the way out of the page.
+       *
+       * `total` and `unread` arrive null when they are unknowable and are
+       * written as null rather than coerced to a number: see `repoTotal` for
+       * why the absence of a figure is a value this system carries on purpose.
+       *
+       * `provisional` is structurally false today, because the guard at the
+       * head of this function means a guess is never published at all — a
+       * reader of the map sees the finished answer or the previous visit's,
+       * never the cache's first draft. It is written off `ctx` rather than
+       * hard-coded because it is the guard's own fact, and a record that
+       * could not say which it was would be the failure the guard exists to
+       * prevent. */
       Promise.resolve(
         S.shelfmap.write(owner, {
           order,
           counts: Object.fromEntries(order.map((l) => [l, buckets.get(l).length])),
           on,
+          status: {
+            repos: rows.length,
+            total,
+            shelves: order.length,
+            tagged: topics.filter((t) => t && t.length).length,
+            source: source || "",
+            warning: warning || "",
+            health: health || "",
+            unread,
+            truncated,
+            pagesRead,
+            deferred: deferred || 0,
+            provisional: !!ctx.provisional,
+            /* WHOSE PROFILE THIS WAS, and it is written rather than withheld.
+             * A stranger's tab renders — it is shelved, searchable and audited,
+             * only the verbs that would spend the reader's token or write their
+             * configuration stand down (P.XIV) — so a record is produced here
+             * either way. The popup cannot tell one from the other: it has no
+             * DOM on the tab, and buying that access costs a permission P.II
+             * does not allow it to spend on a label.
+             *
+             * Which leaves two ways to answer it, and only one of them is an
+             * answer. Not writing the record makes "this is not your profile"
+             * indistinguishable from "you have never opened this profile", and
+             * the popup would fall back to the generic nothing-here state on a
+             * page that is fully shelved in front of the reader. Writing it
+             * labelled lets the surface that cannot look say precisely what
+             * happened and why.
+             *
+             * `!== false` and not `!!`, because that is what `isMine` means
+             * here: an unreadable viewer meta counts as MINE, and this field
+             * must not be the one place in the system that reads the same
+             * silence as a stranger. */
+            mine: ctx.mine !== false,
+          },
         })
       ).catch(() => {});
     };

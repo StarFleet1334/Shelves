@@ -12,7 +12,7 @@
 "use strict";
 
 const { build, readShelves, settle, type, writeNote, openVocab, pickTerm,
-        pickGap, readMark } = require("./world");
+        pickGap, readMark, profilePage } = require("./world");
 
 let failures = 0;
 const results = [];
@@ -27,6 +27,47 @@ function assert(ctx, cond, msg) {
 
 function byLabel(view) {
   return Object.fromEntries(view.shelves.map((s) => [s.label, s]));
+}
+
+/* THE PROFILE NAV, WHICH world.js DOES NOT RENDER. `repoTotal` reads GitHub's
+   own Repositories counter, and world.js builds the list without the nav above
+   it — so the fixture for it has to be put on the page here. Inserted before
+   anything else in the body, as it is on the real page, and replacing any
+   previous one so a scenario can walk several shapes of counter.
+
+   `text` defaults to `title`: GitHub writes both, and the interesting cases are
+   exactly the ones where they disagree ("1.2k" against "1,234") or where one of
+   them is missing. */
+function navCounter(win, spec) {
+  const had = win.document.getElementById("sh-test-nav");
+  if (had) had.remove();
+  const nav = win.document.createElement("nav");
+  nav.id = "sh-test-nav";
+  const a = win.document.createElement("a");
+  a.id = "repositories-tab";
+  a.setAttribute("href", "/octo?tab=repositories");
+  a.setAttribute("data-tab-item", "repositories");
+  const c = win.document.createElement("span");
+  c.id = "repositories-repo-tab-count";
+  c.className = "Counter";
+  if (spec.title != null) c.setAttribute("title", String(spec.title));
+  c.textContent = String(spec.text != null ? spec.text : (spec.title || ""));
+  a.appendChild(c);
+  nav.appendChild(a);
+  win.document.body.insertBefore(nav, win.document.body.firstChild);
+  return c;
+}
+
+/* A PAGE THAT ALWAYS HAS A PAGE AFTER IT — what a 13-page profile looks like to
+   a ceiling of three, which is the one shape world.js's `page2` cannot build:
+   its second page deliberately ends the chain. Chipped, so the rows it merges
+   are answered by the page itself and the scenario measures pagination rather
+   than the ladder. */
+function endlessPage(n) {
+  return profilePage("octo", [
+    { name: "p" + n + "a", chips: ["keep"] },
+    { name: "p" + n + "b", chips: ["keep"] },
+  ], "/octo?tab=repositories&page=" + (n + 2));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -2977,6 +3018,491 @@ const SCENARIOS = [
 
     ctx.info = named.map((s) => s.glyph + " " + s.label).join("   ") +
       "   " + other.glyph + " Ungrouped";
+  }),
+  check("horizon - the fetch ceiling is carried out of the loop, not discarded",
+    async (ctx) => {
+    /* MEASURED BEFORE THE FIX: `fetchRestOfPages` returned its rows and nothing
+       else, so every exit looked identical from outside. The ceiling at
+       `maxPages`, a 429, a throw and a page whose list moved all returned "here
+       are some rows" — and the caller then hid GitHub's pager, which is the only
+       navigation to the pages that were skipped. At 400 repos and a ceiling of
+       10: 330 shelved, 70 unreachable, toolbar reading `330 repos`.
+
+       The record is driven directly here because the shapes that matter are
+       exactly the ones a fixture cannot reach by accident: a profile whose next
+       link never runs out, and three different ways for one page to fail. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [{ name: "a", chips: ["keep"] }],
+      page2: [{ name: "b", chips: ["keep"] }],
+    });
+    await settle();
+    const F = w.win.Shelves.fetchRestOfPages;
+
+    /* THE CEILING. Every page served carries a link to another one, which is
+       what a 13-page profile looks like to a limit of three. */
+    let served = 0;
+    w.win.fetch = async () => ({
+      ok: true, status: 200, text: async () => endlessPage(++served),
+    });
+    const cap = await F(3);
+    assert(ctx, cap.pagesRead === 3,
+      "the ceiling must hold at 3, read " + cap.pagesRead);
+    assert(ctx, cap.rows.length === 6,
+      "and still merge what it did read, got " + cap.rows.length + " rows");
+    assert(ctx, cap.truncated === true,
+      "a page left in hand IS truncation, got " + cap.truncated);
+    assert(ctx, cap.stopped === "cap",
+      "and it must name the ceiling rather than an error, got: " + cap.stopped);
+
+    /* THE HEALTHY EXIT, which is the only one that may report truncated:false
+       — and the only one that licenses the caller to hide the pager. */
+    w.win.fetch = async () => ({
+      ok: true, status: 200,
+      text: async () => profilePage("octo", [{ name: "z", chips: ["keep"] }], ""),
+    });
+    const end = await F(3);
+    assert(ctx, end.truncated === false && end.stopped === "end",
+      "a next link that runs out is the end, got: " +
+      JSON.stringify({ truncated: end.truncated, stopped: end.stopped }));
+    assert(ctx, end.pagesRead === 1 && end.rows.length === 1,
+      "one page read, one row merged, got " + end.pagesRead + "/" + end.rows.length);
+
+    /* THE THREE BREAK PATHS. Each one used to be the same silence, and they
+       want fixing differently: a 429 is "come back later", a throw is the
+       network, and a missing list is GitHub having moved the markup. */
+    w.win.fetch = async () => ({ ok: false, status: 429, text: async () => "" });
+    const http = await F(3);
+    assert(ctx, http.stopped === "http 429" && http.truncated === true,
+      "a refusal is reported with its status, got: " + http.stopped);
+    assert(ctx, http.pagesRead === 0 && http.rows.length === 0,
+      "and nothing is claimed to have been read, got " + http.pagesRead);
+
+    w.win.fetch = async () => { throw new TypeError("network down"); };
+    const threw = await F(3);
+    assert(ctx, threw.stopped === "error" && threw.truncated === true,
+      "a throw is still an unread page, got: " + threw.stopped);
+
+    w.win.fetch = async () => ({
+      ok: true, status: 200,
+      text: async () => "<!doctype html><html><body><div>moved</div></body></html>",
+    });
+    const nolist = await F(3);
+    assert(ctx, nolist.stopped === "nolist" && nolist.truncated === true,
+      "a page with no list is the canary's problem, not a silent 0, got: " +
+      nolist.stopped);
+
+    ctx.info = "cap/end/http 429/error/nolist, and only `end` says truncated:false";
+  }),
+
+  check("horizon - GitHub's pager survives whatever the merge could not reach",
+    async (ctx) => {
+    /* THE OTHER HALF OF THE SAME DEFECT, and the half the reader actually
+       feels. `hidePager()` sets display:none on `.paginate-container`; run past
+       the ceiling, that deleted the only route to the repositories we had just
+       decided not to fetch. The rows were not merely absent from the shelves,
+       they were unreachable from the page. */
+    let served = 0;
+    const over = build({
+      owner: "octo",
+      settings: { groups: ["keep"], maxPages: 2 },
+      repos: [{ name: "a", chips: ["keep"] }],
+      page2: [{ name: "b", chips: ["keep"] }],
+    });
+    const pass = over.win.fetch;
+    over.win.fetch = async (u) => (/[?&]page=\d/.test(String(u))
+      ? { ok: true, status: 200, text: async () => endlessPage(++served) }
+      : pass(u));
+    await settle(1200);
+
+    const pager = over.win.document.querySelector(".paginate-container");
+    assert(ctx, pager, "the fixture must have a pager to hide");
+    assert(ctx, pager && pager.style.display !== "none",
+      "a truncated merge must leave GitHub's own navigation standing, display: " +
+      (pager && pager.style.display));
+    const v = readShelves(over.win);
+    assert(ctx, v && v.names.length === 5,
+      "and the two pages it DID read are still merged, rows " +
+      ((v || {}).names || []).length);
+
+    /* AND IT IS NOT A REFUSAL TO EVER HIDE IT. A merge that reached the end has
+       genuinely replaced what the pager navigates to. */
+    const whole = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [{ name: "a", chips: ["keep"] }],
+      page2: [{ name: "b", chips: ["keep"] }],
+    });
+    await settle(1200);
+    const hidden = whole.win.document.querySelector(".paginate-container");
+    assert(ctx, hidden && hidden.style.display === "none",
+      "a complete merge still hides the pager it replaced, display: " +
+      (hidden && hidden.style.display));
+
+    ctx.info = "2 of N pages read: pager kept, 5 rows merged · complete run: pager hidden";
+  }),
+
+  check("total - read off the nav, and null rather than wrong under a filter",
+    async (ctx) => {
+    /* THE EXTENSION CANNOT COUNT WHAT IT DID NOT FETCH, so the figure is read
+       from the one place GitHub renders it. The trust rule is the whole test:
+       that counter counts the PROFILE, and Type / Language / search replace the
+       LIST without touching it — so a filtered list of 12 beside a counter of
+       400 is two true numbers and a false relationship. The reader has no way
+       to catch that, which is why it must come back null. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [{ name: "a", chips: ["keep"] }],
+    });
+    await settle();
+    const T = w.win.Shelves.repoTotal;
+    const here = { search: "?tab=repositories" };
+
+    assert(ctx, T(here, w.win.document) === null,
+      "no counter on the page is no claim, got: " + T(here, w.win.document));
+
+    navCounter(w.win, { title: "400" });
+    assert(ctx, T(here, w.win.document) === 400,
+      "a clean profile answers its own count, got: " + T(here, w.win.document));
+
+    /* GitHub abbreviates the text and keeps the exact figure in `title`. */
+    navCounter(w.win, { title: "1,234", text: "1.2k" });
+    assert(ctx, T(here, w.win.document) === 1234,
+      "the title is the exact figure and wins, got: " + T(here, w.win.document));
+
+    /* AND AN ABBREVIATION ALONE IS NOT A NUMBER. 1200 against a true 1234
+       would be a visible lie about 34 repositories, so it is null — this is
+       deliberately stricter than facts.js's star counter, which rounds. */
+    navCounter(w.win, { text: "1.2k" });
+    assert(ctx, T(here, w.win.document) === null,
+      "a rounded count may not stand in for an exact one, got: " +
+      T(here, w.win.document));
+
+    navCounter(w.win, { title: "400" });
+    ["type=fork", "language=python", "q=wire"].forEach((f) => {
+      assert(ctx, T({ search: "?tab=repositories&" + f }, w.win.document) === null,
+        "a filtered list may not be measured against the profile's count (" +
+        f + "), got: " + T({ search: "?tab=repositories&" + f }, w.win.document));
+    });
+
+    /* THE THREE THAT ARE NOT FILTERS. Sorting reorders and `page` offsets;
+       neither changes which repositories are in the collection being counted,
+       and answering null there would cost the number for no reason. */
+    ["sort=name", "direction=asc", "page=3"].forEach((p) => {
+      assert(ctx, T({ search: "?tab=repositories&" + p }, w.win.document) === 400,
+        p + " does not change the collection, got: " +
+        T({ search: "?tab=repositories&" + p }, w.win.document));
+    });
+
+    ctx.info = "400 · title beats 1.2k · 1.2k alone is null · q/type/language null · sort/page kept";
+  }),
+
+  check("total - the toolbar qualifies its count only when there is more behind it",
+    async (ctx) => {
+    /* P.IV, applied to the first number on the line rather than the last. `330
+       repos` was the extension stating the size of a collection it had only
+       partly read, which is the same silence the source line exists to forbid
+       — and it is worse than a missing rung, because nothing on the page
+       contradicts it. */
+    const six = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: Array.from({ length: 4 }, (_, i) => ({ name: "a" + i, chips: ["keep"] })),
+      page2: [{ name: "b0", chips: ["keep"] }, { name: "b1", chips: ["keep"] }],
+    });
+    navCounter(six.win, { title: "10" });
+    await settle(1200);
+    const v = readShelves(six.win);
+    assert(ctx, v, "never rendered");
+    if (!v) return;
+    assert(ctx, /^6 of 10 repos · /.test(v.note),
+      "a known total that exceeds the rows is said out loud, got: " + v.note);
+    assert(ctx, /4 on pages not read/.test(v.note),
+      "and the difference is named, got: " + v.note);
+
+    /* UNCHANGED WHERE THERE IS NOTHING TO QUALIFY. `10 of 10` on every ordinary
+       profile would teach the reader to skip the number, and the form only
+       works because it is unusual. */
+    const four = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: Array.from({ length: 4 }, (_, i) => ({ name: "a" + i, chips: ["keep"] })),
+    });
+    navCounter(four.win, { title: "4" });
+    await settle(1200);
+    const v2 = readShelves(four.win);
+    assert(ctx, v2 && /^4 repos · /.test(v2.note),
+      "a complete page reads exactly as it always did, got: " + (v2 || {}).note);
+    assert(ctx, v2 && !/pages not read/.test(v2.note),
+      "with nothing appended, got: " + (v2 || {}).note);
+
+    /* THE THIRD STATE. Truncated with no counter to read: we know there is more
+       and cannot count it, and a number there would be the guess `repoTotal`
+       refused to make. Never `0 on pages not read`, which is the claim that the
+       page is complete. */
+    let served = 0;
+    const blind = build({
+      owner: "octo",
+      settings: { groups: ["keep"], maxPages: 1 },
+      repos: [{ name: "a", chips: ["keep"] }],
+      page2: [{ name: "b", chips: ["keep"] }],
+    });
+    const pass = blind.win.fetch;
+    blind.win.fetch = async (u) => (/[?&]page=\d/.test(String(u))
+      ? { ok: true, status: 200, text: async () => endlessPage(++served) }
+      : pass(u));
+    await settle(1200);
+    const v3 = readShelves(blind.win);
+    assert(ctx, v3 && /^3 repos · /.test(v3.note),
+      "an uncountable total leaves the count bare, got: " + (v3 || {}).note);
+    assert(ctx, v3 && /more on pages not read/.test(v3.note),
+      "and says `more`, not a figure and not 0, got: " + (v3 || {}).note);
+    assert(ctx, v3 && !/\d+ on pages not read/.test(v3.note),
+      "no invented number may appear there, got: " + (v3 || {}).note);
+
+    ctx.info = "6 of 10 · 4 unread | 4 repos, nothing appended | 3 repos · more unread";
+  }),
+
+  check("shelf map - the status block is what the popup reads instead of guessing",
+    async (ctx) => {
+    /* THE POPUP HAS NO PAGE. No content script, no DOM, nothing to count — so
+       every number it shows is either written here by the page that worked it
+       out or invented beside it, and two halves of one extension disagreeing in
+       public is the failure this map was built to prevent for the repo chip.
+
+       The seeded record is a previous visit's, and it must not survive: a write
+       replaces the owner's record wholesale. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: Array.from({ length: 4 }, (_, i) => ({
+        name: "a" + i, chips: i < 3 ? ["keep"] : [],
+      })),
+      page2: [{ name: "b0", chips: ["keep"] }, { name: "b1", chips: [] }],
+      shelfMap: {
+        octo: { at: 1, order: ["stale"], counts: { stale: 9 }, on: { "octo/gone": "stale" },
+                status: { repos: 1, provisional: true } },
+      },
+    });
+    navCounter(w.win, { title: "10" });
+
+    /* EVERY WRITE IS RECORDED, because the thing worth proving is a NEGATIVE:
+       a chipped profile renders twice, and the first render is provisional. If
+       a guess ever reached the store the popup could read a draft as an answer
+       — and on a long cold run it would read it for the whole run. */
+    const writes = [];
+    const real = w.win.Shelves.shelfmap.write.bind(w.win.Shelves.shelfmap);
+    w.win.Shelves.shelfmap.write = (owner, map) => {
+      writes.push(map);
+      return real(owner, map);
+    };
+    await settle(1400);
+
+    const rec = (w.store.local.shelfMap || {}).octo;
+    assert(ctx, rec && rec.status, "the map must carry a status block");
+    if (!rec || !rec.status) return;
+    const st = rec.status;
+    const v = readShelves(w.win);
+
+    assert(ctx, rec.order.indexOf("stale") === -1,
+      "the previous visit's record is replaced, not merged into, got: " +
+      JSON.stringify(rec.order));
+    assert(ctx, writes.length === 1 && writes[0].status.provisional === false,
+      "a provisional render must never publish — writes: " + writes.length +
+      ", provisional: " + JSON.stringify(writes.map((m) => m.status.provisional)));
+
+    assert(ctx, st.repos === 6, "repos is the rows actually shelved, got " + st.repos);
+    assert(ctx, st.total === 10, "total is the nav's figure, got " + st.total);
+    assert(ctx, st.unread === 4, "unread is the difference, got " + st.unread);
+    assert(ctx, st.truncated === false,
+      "a merge that reached the end is not truncated, got " + st.truncated);
+    assert(ctx, st.pagesRead === 1, "one extra page was read, got " + st.pagesRead);
+    assert(ctx, st.shelves === rec.order.length && st.shelves === v.shelves.length,
+      "shelves agrees with the order AND with the page, got " + st.shelves);
+    assert(ctx, st.tagged === 4,
+      "tagged counts the repos with topics, got " + st.tagged);
+    assert(ctx, typeof st.source === "string" && st.source.length > 0 &&
+      v.note.indexOf("via " + st.source) !== -1,
+      "source is the same rung the page named, got: " + st.source);
+    assert(ctx, st.warning === "" && st.health === "",
+      "a clean run carries empty sentences, never undefined, got: " +
+      JSON.stringify([st.warning, st.health]));
+    assert(ctx, st.deferred === 0, "nothing was deferred, got " + st.deferred);
+
+    /* THE NUMBERS IN THE BLOCK AND THE NUMBERS ON THE LINE ARE ONE FACT. If
+       these can drift, the popup is a second opinion rather than a copy. */
+    assert(ctx, v.note.indexOf(st.repos + " of " + st.total + " repos") === 0,
+      "the block must say what the toolbar says, got: " + v.note);
+
+    ctx.info = "1 write, provisional:false, 6 of 10, " + st.shelves +
+      " shelves, 4 tagged, via " + st.source;
+  }),
+
+  check("filter counts - a shelf counts repositories, not the <li> inside its rows",
+    async (ctx) => {
+    /* `moveRow` already carried the comment explaining this trap and the fix for
+       it; `applyFilter` had neither, and counted every descendant <li>. GitHub
+       ships a list inside each row's star control, so a five-row shelf with one
+       match reported `6 / 10` — the denominator merely silly, the numerator
+       structural: nothing ever gives those nested <li> `sh-hide`, so `hits === 0`
+       was unreachable and a shelf with no match could never be dimmed.
+
+       The fixture adds the nested list explicitly, because world.js's row does
+       not ship one and a test that cannot see the trap cannot see the fix. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep", "other"] },
+      repos: Array.from({ length: 5 }, (_, i) => ({ name: "k" + i, chips: ["keep"] }))
+        .concat([{ name: "o1", chips: ["other"] }]),
+    });
+    await settle(1200);
+    const host = w.win.document.getElementById("shelves-host");
+    assert(ctx, host, "never rendered");
+    if (!host) return;
+
+    const rows = [...host.querySelectorAll("li[data-sh-name]")];
+    assert(ctx, rows.length === 6, "six rows expected, got " + rows.length);
+    rows.forEach((li) => {
+      const ul = w.win.document.createElement("ul");
+      const inner = w.win.document.createElement("li");
+      inner.textContent = "Add this repository to a list";
+      ul.appendChild(inner);
+      li.appendChild(ul);
+    });
+
+    type(w.win, "k3");
+    const v = readShelves(w.win);
+    const b = byLabel(v);
+    assert(ctx, b.keep, "the keep shelf must exist");
+    if (!b.keep) return;
+
+    const keep = v.shelves.find((s) => s.label === "keep");
+    const counts = [...host.querySelectorAll("details.sh-shelf")].map((d) => [
+      (d.querySelector(".sh-name") || {}).textContent,
+      (d.querySelector(".sh-count") || {}).textContent,
+    ]);
+    assert(ctx, counts.some((c) => c[0] === "keep" && c[1] === "1 / 5"),
+      "one match among five rows reads `1 / 5`, not `6 / 10`, got: " +
+      JSON.stringify(counts));
+    assert(ctx, v.found === "1 of 6",
+      "and the toolbar's own tally never counted them, got: " + v.found);
+
+    const other = [...host.querySelectorAll("details.sh-shelf")].find(
+      (d) => (d.querySelector(".sh-name") || {}).textContent === "other");
+    assert(ctx, other && other.classList.contains("sh-nomatch"),
+      "a shelf with nothing matching is dimmed — unreachable while its rows' " +
+      "own <li> counted as hits");
+    const keepEl = [...host.querySelectorAll("details.sh-shelf")].find(
+      (d) => (d.querySelector(".sh-name") || {}).textContent === "keep");
+    assert(ctx, keepEl && !keepEl.classList.contains("sh-nomatch"),
+      "and a shelf with a match is not");
+    assert(ctx, keep && keep.repos.indexOf("k3") !== -1,
+      "the matching row is still where it was");
+
+    ctx.info = "1 / 5 with a nested <li> per row (was 6 / 10), and `other` dims";
+  }),
+  check("shelf map - whose profile it was is written down, not left to be guessed",
+    async (ctx) => {
+    /* A STRANGER'S TAB IS STILL SHELVED (P.XIV narrows the verbs that spend the
+       reader's token and write their configuration, not the reading of the
+       page), so a record is written either way — and the two records were
+       indistinguishable. The popup has no DOM on the tab and cannot call
+       `isMine()`; buying that access costs a permission, which P.II does not
+       allow it to spend on a label. So the page that knows says so.
+
+       Withholding the stranger's record would not have been the safe option:
+       "not yours" would read as "never opened", on a page that is fully shelved
+       in front of the reader. */
+    const mine = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [{ name: "a", chips: ["keep"] }, { name: "b", chips: [] }],
+    });
+    await settle(1200);
+    const r1 = (mine.store.local.shelfMap || {}).octo;
+    assert(ctx, r1 && r1.status && r1.status.mine === true,
+      "the reader's own profile is labelled as theirs, got: " +
+      JSON.stringify(r1 && r1.status && r1.status.mine));
+
+    const theirs = build({
+      viewer: "me", owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [{ name: "a", chips: ["keep"] }, { name: "b", chips: [] }],
+    });
+    await settle(1200);
+    const r2 = (theirs.store.local.shelfMap || {}).octo;
+    assert(ctx, r2 && r2.status,
+      "a stranger's profile still produces a record — it was still shelved");
+    assert(ctx, r2 && r2.status && r2.status.mine === false,
+      "and it says so, got: " + JSON.stringify(r2 && r2.status && r2.status.mine));
+
+    /* AND IT CARRIES THE FIGURES, because the page it describes is shelved.
+       These were briefly withheld after a leak — a profile passed through a
+       minute ago outranked the reader's own visit on timestamp, so the popup
+       drew SOMEONE ELSE'S `99 repos · 3 shelves` under "the last profile
+       Shelves grouped". Withholding was the wrong fix: the numbers were right
+       and the attribution was wrong, and it cost the reader the answer the free
+       rungs had already produced for a page covered in shelves in front of
+       them. `latestOf` in popup.js refuses a record that is not the reader's;
+       that is where the bug lived. */
+    assert(ctx, r2 && r2.status && r2.status.repos === 2,
+      "the rest of the block is the same page it always was, got " +
+      (r2 && r2.status && r2.status.repos));
+    assert(ctx, r2 && r2.on && Object.keys(r2.on).length,
+      "including which shelf each of their repos landed on");
+    assert(ctx, /not yours/.test(String(r2 && r2.status && r2.status.source)),
+      "and the source says which rungs were allowed to answer, got: " +
+      JSON.stringify(r2 && r2.status && r2.status.source));
+
+    /* UNKNOWN COUNTS AS MINE, exactly as `isMine` has it. A viewer meta GitHub
+       moves must not make this one field read the same silence as a stranger —
+       that would stand the popup down on the reader's own profile. */
+    const blind = build({
+      owner: "octo",
+      settings: { groups: ["keep"] },
+      repos: [{ name: "a", chips: ["keep"] }],
+    });
+    await settle(1200);
+    const r3 = (blind.store.local.shelfMap || {}).octo;
+    assert(ctx, r3 && r3.status && r3.status.mine === true,
+      "a page with no viewer meta degrades to `mine`, got: " +
+      JSON.stringify(r3 && r3.status && r3.status.mine));
+
+    ctx.info = "own: mine true · stranger: figures kept, mine false, source says `not yours` · unreadable viewer: true";
+  }),
+
+  check("shelf map - other people's profiles are kept, but not hoarded",
+    async (ctx) => {
+    /* The reader's own profiles are the point of this map and are never
+       evicted. Other people's are a browsing history, and one permanent entry
+       per profile ever passed through would be a record of where the reader has
+       been — kept forever, for a panel that only asks about the tab in front of
+       it. So the newest few survive. */
+    const w = build({ viewer: "me", owner: "me", settings: { groups: ["keep"] },
+                      repos: [{ name: "a", chips: ["keep"] }] });
+    await settle(1200);
+
+    const map = w.store.local.shelfMap || {};
+    for (let i = 1; i <= 7; i++) {
+      await w.win.Shelves.shelfmap.write("stranger" + i, {
+        order: ["keep"], counts: { keep: 1 }, on: {},
+        status: { mine: false, repos: 1 },
+      });
+    }
+    const after = w.store.local.shelfMap || {};
+    const theirs = Object.keys(after).filter((k) => after[k].status.mine === false);
+
+    assert(ctx, theirs.length === 5,
+      "five of the seven strangers survive, got " + theirs.length);
+    assert(ctx, theirs.indexOf("stranger1") === -1 && theirs.indexOf("stranger2") === -1,
+      "and it is the oldest two that fell off, got: " + JSON.stringify(theirs.sort()));
+    assert(ctx, !!after.me && after.me.status.mine === true,
+      "the reader's own profile is never evicted, whatever else arrives");
+    assert(ctx, typeof map === "object", "and the map is still a map");
+
+    ctx.info = "7 strangers written, newest 5 kept, oldest 2 evicted, own profile untouched";
   }),
 ];
 

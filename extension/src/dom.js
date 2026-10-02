@@ -219,23 +219,50 @@ globalThis.Shelves = globalThis.Shelves || {};
 
   /* MEASURED (charter §3): the tab paginates at 30. Grouping only page one
    * gives shelves that are silently incomplete, which is worse than none.
-   * Same-origin fetches, so the session cookie rides along for free (P.VII). */
+   * Same-origin fetches, so the session cookie rides along for free (P.VII).
+   *
+   * ---- WHY THIS RETURNS A RECORD AND NOT AN ARRAY -------------------------
+   * It used to return `out` alone, and the defect that made that unacceptable
+   * was not in this function — it was in what the caller could then do with it.
+   *
+   * Every exit below except one leaves `url` holding a page nothing ever read:
+   * the ceiling at `maxPages`, a non-ok response, a throw, a page whose list
+   * could not be found. All four were discarded here. The caller therefore
+   * could not tell "that was all of them" from "that was as many as I was
+   * willing to fetch" — and it answered the question anyway, by calling
+   * `hidePager()`, which sets display:none on the ONLY navigation to the pages
+   * that were skipped. At 400 repositories and a ceiling of 10 that is 330
+   * rows shelved, 70 unreachable by any gesture on the page, and a toolbar
+   * reading `330 repos` as though it were the whole collection. One 429 on
+   * page four of thirteen did the same thing with 120 rows.
+   *
+   * So the horizon leaves the loop with the rows. `truncated` is the single
+   * fact the caller needs and it is the one the loop cannot help knowing:
+   * `url` is still truthy exactly when there is more behind it. `stopped` is
+   * for whoever reads a bug report rather than for the code — "cap" and
+   * "http 429" fail identically on screen and want fixing differently. */
   S.fetchRestOfPages = async function fetchRestOfPages(maxPages) {
     const out = [];
     let link = nextLink(document);
     let url = link ? link.href : null;
     let n = 0;
+    /* Overwritten by every exit but the healthy one, which is the exit that
+     * never has to say anything: falling out of the `while` with `url` null IS
+     * "end", and it is the only way `truncated` comes back false. */
+    let stopped = "end";
     while (url && n < (maxPages || 10)) {
       let doc;
       try {
         const res = await fetch(url, { credentials: "same-origin" });
-        if (!res.ok) break;
+        if (!res.ok) { stopped = "http " + res.status; break; }
         doc = new DOMParser().parseFromString(await res.text(), "text/html");
       } catch (e) {
-        break; // one unreachable page costs its repos, never the render (P.III)
+        // one unreachable page costs its repos, never the render (P.III)
+        stopped = "error";
+        break;
       }
       const ul = S.findList(doc);
-      if (!ul) break;
+      if (!ul) { stopped = "nolist"; break; }
       S.rowsOf(ul).forEach((li) => {
         const row = document.importNode(li, true);
         S.dropStrandedFragments(row);
@@ -245,7 +272,87 @@ globalThis.Shelves = globalThis.Shelves || {};
       url = nx ? new URL(nx.getAttribute("href"), location.origin).href : null;
       n++;
     }
-    return out;
+    /* The ceiling is the one exit with nothing to report for itself: no
+     * request failed, the loop condition simply went false with a page still
+     * in hand. Naming it here keeps the three break paths single-purpose. */
+    if (url && stopped === "end") stopped = "cap";
+    return { rows: out, truncated: !!url, pagesRead: n, stopped };
+  };
+
+  /* ---- HOW MANY ARE THERE REALLY, AND WHEN MAY WE SAY SO ------------------
+   * The ceiling above can now announce itself, but "330 of what?" is not a
+   * question this extension can answer by counting: the rows it did not fetch
+   * are the rows it cannot count. GitHub renders the figure in the profile
+   * nav, so it is read rather than derived.
+   *
+   * THE COUNTER COUNTS THE PROFILE, NOT THE LIST — AND THAT IS THE WHOLE
+   * DIFFICULTY. GitHub's own Type / Language / search controls replace the
+   * list wholesale and leave the nav counter alone, so on a filtered tab the
+   * page genuinely holds `12 repositories` beside a counter reading `400`.
+   * Printing "12 of 400" there is not an imprecision, it is a false statement
+   * about a relationship that does not exist — and it is the kind of false
+   * statement a reader has no way to catch, because both numbers are real.
+   *
+   * So a filter means null. Not a guess, not the unfiltered count, not the
+   * row count doubling as a total: null, which every consumer is built to
+   * render as "no claim". The trade is deliberate and it is the same one
+   * P.III makes everywhere else — a missing number costs one qualifier on one
+   * line, and a wrong number costs the reader their reason to believe the
+   * other numbers beside it.
+   *
+   * `sort`, `direction` and `page` are NOT in the list and must not be: they
+   * reorder and they offset, and neither changes which repositories are in
+   * the collection the counter is counting. A reader who sorted by name is
+   * still looking at all of them. */
+  const LIST_FILTERS = ["q", "type", "language"];
+
+  /* Ordered most specific first, exactly as `fullNameOf` is: the two ids are
+   * GitHub's current spelling of the Repositories nav item and its counter,
+   * and the href-shaped selectors below them are what survives the ids being
+   * renamed — the one thing that cannot change while the tab works is that
+   * the link to it carries `tab=repositories`. A selector that matches
+   * something unparseable falls through to the next rather than returning
+   * null, because a stale id matching the wrong span must not take the whole
+   * answer with it. */
+  const TOTAL_SELECTORS = [
+    "#repositories-repo-tab-count",
+    "#repositories-tab .Counter",
+    '[data-tab-item="repositories"] .Counter',
+    'nav a[href*="tab=repositories"] .Counter',
+    'a[href*="tab=repositories"] .Counter',
+  ];
+
+  /* DELIBERATELY STRICTER THAN `count()` IN facts.js, and for a reason that
+   * does not apply there: that one reads "1.2k" as 1200, which is the right
+   * answer for a star count nobody compares against anything. Here the number
+   * is put in a sentence beside an exact row count, so 1200 against a true
+   * 1234 would be a visible lie about 34 repositories. The title attribute
+   * carries the exact figure; the text is accepted only when it is exact. */
+  function exactCount(raw) {
+    const s = String(raw == null ? "" : raw).trim().replace(/[,\s]/g, "");
+    if (!/^\d+$/.test(s)) return null;
+    const n = Number(s);
+    return isFinite(n) ? n : null;
+  }
+
+  /** The profile's repository count, or null when we may not claim one. */
+  S.repoTotal = function repoTotal(loc, doc) {
+    loc = loc || location;
+    doc = doc || document;
+    const qs = new URLSearchParams(loc.search);
+    for (const k of LIST_FILTERS) {
+      const v = qs.get(k);
+      if (v !== null && String(v).trim() !== "") return null;
+    }
+    for (const sel of TOTAL_SELECTORS) {
+      const el = doc.querySelector(sel);
+      if (!el) continue;
+      const titled = exactCount(el.getAttribute && el.getAttribute("title"));
+      if (titled !== null) return titled;
+      const written = exactCount(el.textContent);
+      if (written !== null) return written;
+    }
+    return null;
   };
 
   S.hidePager = function hidePager() {

@@ -4,7 +4,13 @@
     <meta charset="utf-8" />
     <title>Shelves — options</title>
     <style>
-      /* Sized to work both as a 400px action popup and as a full options page. */
+      /* THIS WAS THE ACTION POPUP TOO, AND IS NOT ANY MORE. `default_popup`
+       * pointed here, so clicking the toolbar icon answered "is this working?"
+       * with a settings form. `popup.html` answers it now, and this file is the
+       * options page alone. The narrow default stays — an options page still
+       * opens in a small panel in some browsers — but it is a floor now, not a
+       * constraint, and the tokens below are shared with the popup so the two
+       * surfaces read as one product. */
       :root {
         color-scheme: light dark;
         --bg: #ffffff;

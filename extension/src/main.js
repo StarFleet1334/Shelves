@@ -47,13 +47,51 @@ globalThis.Shelves = globalThis.Shelves || {};
       const owner = S.owner();
 
       let rows = S.rowsOf(sourceUl);
+      /* WHAT THE MERGE COULD NOT REACH, carried as far as the toolbar.
+       * `stopped` starts at "off" because that is the honest answer when
+       * `fetchAllPages` is false: page one is not all there is, it is all we
+       * were asked to read, and GitHub's pager below is untouched and says so. */
+      let truncated = false;
+      let pagesRead = 0;
+      let stopped = "off";
       if (settings.fetchAllPages) {
         const more = await S.fetchRestOfPages(settings.maxPages);
-        if (more.length) {
-          rows = rows.concat(more);
-          S.hidePager();
+        truncated = more.truncated;
+        pagesRead = more.pagesRead;
+        stopped = more.stopped;
+        if (more.rows.length) {
+          rows = rows.concat(more.rows);
+          /* THE PAGER STAYS WHEN THERE IS SOMETHING BEHIND IT. Hiding it was
+           * unconditional, and on a collection past the ceiling that removed
+           * the reader's only route to the repositories we had just decided
+           * not to fetch — those rows were not merely missing from the
+           * shelves, they were unreachable from the page. GitHub's navigation
+           * is hidden only where we have genuinely replaced what it navigates
+           * to.
+           *
+           * `more.rows.length` is kept as the other half of the condition for
+           * a case `truncated` cannot see: standing on the LAST page of a
+           * multi-page tab there is no next link, nothing merges, and the
+           * container holds the Previous link. Hiding it there strands the
+           * reader the same way, one direction over. */
+          if (!truncated) S.hidePager();
         }
       }
+
+      /* READ FROM THE NAV, AND NULL RATHER THAN WRONG — see `repoTotal`. Read
+       * once, here, for the same reason `lastSeen` is read once: GitHub's own
+       * filters re-enter this function, and a figure re-read per render is a
+       * number that moves under a line that is meant to be a fact. */
+      const total = S.repoTotal();
+      /* THREE STATES, AND THE THIRD IS THE ONE TO BE CAREFUL ABOUT. A known
+       * total gives a count. No total and nothing missing gives zero. No total
+       * and a horizon gives null — "there are more and I cannot say how many"
+       * — and never 0, because 0 is the claim that the page is complete and
+       * that is exactly what we have just found out it is not. The two are
+       * different sentences in the toolbar and a different fact in the map. */
+      const unread = (total !== null && total > rows.length)
+        ? total - rows.length
+        : (truncated ? null : 0);
 
       const names = rows.map(S.fullNameOf);
 
@@ -126,6 +164,15 @@ globalThis.Shelves = globalThis.Shelves || {};
              * and the moment the ladder answers it says so instead. */
             source: "page + cache",
             warning: "", health: "", deferred: 0,
+            /* THESE FOUR ARE NOT PROVISIONAL, and that is why they are passed
+             * in full here rather than stubbed like the three above. The merge
+             * and the nav read both happened before this frame is built, so
+             * the horizon is as true now as it will be after the ladder — it
+             * is the only thing on this line that rung 4 cannot change its
+             * mind about. Stubbing them would have made the first frame say
+             * `330 repos` and the second `330 of 400`, which is the drift the
+             * one-function-called-twice shape in view.js exists to prevent. */
+            total, unread, truncated, pagesRead, stopped,
             provisional: true,
             handlers: shelfHandlers(),
           });
@@ -195,6 +242,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         host = S.render({
           rows, topics, facts, names, notes, settings, sourceUl, source, warning,
           health, owner, deferred, overrides, pins, mine, now, lastSeen,
+          total, unread, truncated, pagesRead, stopped,
           handlers: shelfHandlers(),
         });
         sourceUl.replaceWith(host);
