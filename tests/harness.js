@@ -268,8 +268,25 @@ function midPass(w, opts) {
   const t = { answered: 0, held: 0, writes: [], inFlight: 0, maxInFlight: 0,
               added: 0, removed: 0, live: [] };
 
+  /* THE HAND ON THE GATE (`gate: true`): every fetch waits in `t.queue` until
+     `t.release(n)` lets the oldest n through — for the scenarios that have to
+     watch the store after EACH read rather than after a dying tab's last one.
+     Unreleased fetches simply never settle, which keeps nothing alive. */
+  t.queue = [];
+  t.release = (n) => {
+    let k = 0;
+    while (k < (n == null ? 1 : n) && t.queue.length) { t.queue.shift()(); k++; }
+    return k;
+  };
+
   const fetchReal = w.win.fetch;
   w.win.fetch = (url) => {
+    if (o.gate) {
+      return new Promise((res, rej) => t.queue.push(() => {
+        t.answered++;
+        Promise.resolve(fetchReal(url)).then(res, rej);
+      }));
+    }
     if (o.blockAfter != null && t.answered >= o.blockAfter) {
       t.held++;
       return new Promise(() => {});
@@ -812,6 +829,112 @@ const SCENARIOS = [
     assert(ctx, (t.writes[1] || []).length === 14,
       "and it carries all 14 read, carried " + (t.writes[1] || []).length);
     ctx.info = "first write stuck; freeze wrote " + (t.writes[1] || []).length + " at once";
+  }),
+
+  check("mid-pass — a hidden tab writes every read as it lands", async (ctx) => {
+    /* A DISCARD SENDS NO EVENT. Chrome discards only hidden tabs, and when it
+       does the page simply stops — no pagehide, no freeze, no last-chance
+       write. So a hidden pass batching ten at a time could lose up to nine
+       records it had already paid for. Hidden, the threshold is one: each read
+       is put down as it lands. One read at a time through the gate, and the
+       store checked after every one. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 1, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w, { gate: true });
+    await settle(400);
+    assert(ctx, t.queue.length === 1,
+      "at concurrency 1 exactly one fetch waits at the gate, waiting " + t.queue.length);
+
+    for (let i = 0; i < 3; i++) { t.release(1); await settle(40); }
+    assert(ctx, w.counters.scraped.length === 3 && t.writes.length === 0,
+      "3 visible reads are below FLUSH_EVERY and must not write, read " +
+      w.counters.scraped.length + ", wrote " + t.writes.length);
+
+    leave(w, "visibilitychange");
+    await settle(40);
+    assert(ctx, t.writes.length === 1 && storedFacts(w).length === 3,
+      "going hidden writes the 3 held, writes " + t.writes.length +
+      ", stored " + storedFacts(w).length);
+
+    const steps = [];
+    for (let k = 1; k <= 5; k++) {
+      const before = t.writes.length;
+      t.release(1);
+      await settle(40);
+      const read = w.counters.scraped.slice().sort();
+      const kept = storedFacts(w).sort();
+      steps.push(kept.length);
+      assert(ctx, read.length === 3 + k,
+        "hidden read " + k + ": the pass must have read " + (3 + k) + ", read " + read.length);
+      assert(ctx, t.writes.length === before + 1,
+        "hidden read " + k + ": must write once of its own, wrote " +
+        (t.writes.length - before));
+      assert(ctx, kept.join() === read.join(),
+        "hidden read " + k + ": the store must hold exactly the " + read.length +
+        " read, holds " + kept.length);
+    }
+
+    /* BACK IN FRONT, BACK TO BATCHING. A watched tab is in no danger of a
+       silent discard, and a write per read there is a storage write per page
+       for nothing. */
+    leave(w, "visibilitychange", "visible");
+    await settle(40);
+    const visibleFrom = t.writes.length;
+    for (let i = 0; i < 2; i++) { t.release(1); await settle(40); }
+    assert(ctx, w.counters.scraped.length === 10,
+      "2 more visible reads, read " + w.counters.scraped.length);
+    assert(ctx, t.writes.length === visibleFrom,
+      "visible again, a read must not write on its own, wrote " +
+      (t.writes.length - visibleFrom));
+    assert(ctx, storedFacts(w).length === 8,
+      "the store still holds the 8 put down while hidden, holds " + storedFacts(w).length);
+    ctx.info = "visible 3 → 0 writes; hidden → 3; per read " + steps.join(", ") +
+      "; visible +2 → 0 writes";
+  }),
+
+  check("mid-pass — a hidden tab's per-read writes never overlap", async (ctx) => {
+    /* A WRITE PER READ IS MANY WRITES, and each is the whole object — so
+       hidden is where the chain earns its keep. Reads are let through three at
+       a time while the previous write is still on its way (30ms, then 5ms,
+       alternating, so a later write would overtake an earlier one if they ran
+       side by side). None may overlap, none may shrink, and the store must end
+       with every record read. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w, { gate: true, delay: (i) => (i % 2 ? 5 : 30) });
+    leave(w, "visibilitychange");          // hidden before the first read lands
+    await settle(400);
+    for (let round = 0; round < 12 && w.counters.scraped.length < 25; round++) {
+      t.release(t.queue.length);
+      await settle(12);
+    }
+    await settle(400);
+
+    assert(ctx, w.counters.scraped.length === 25,
+      "all 25 are read, read " + w.counters.scraped.length);
+    assert(ctx, t.maxInFlight === 1,
+      "no two cache writes may be in flight at once, saw " + t.maxInFlight);
+    const sizes = t.writes.map((k) => k.length);
+    /* NOT A COUNT OF WRITES: the chain rightly folds reads that land behind a
+       slow write into the next one, so how many there are is the scheduler's
+       business. What batching can never do is write before ten reads. */
+    assert(ctx, sizes.length >= 2 && sizes[0] < 10,
+      "hidden, the first write must not wait for ten reads, got " +
+      (sizes.join() || "none"));
+    assert(ctx, sizes.every((n, i) => i === 0 || n >= sizes[i - 1]),
+      "no write may carry fewer records than the one before it: " + sizes.join());
+    assert(ctx, sizes[sizes.length - 1] === 25 && storedFacts(w).length === 25,
+      "the last write and the store hold all 25, last " + sizes[sizes.length - 1] +
+      ", stored " + storedFacts(w).length);
+    ctx.info = "writes " + sizes.join(" → ") + ", max in flight " + t.maxInFlight;
   }),
 
   check("token-fallback — a dead token falls back to the public API, not to 76 page reads",

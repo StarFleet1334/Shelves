@@ -113,7 +113,8 @@ globalThis.Shelves = globalThis.Shelves || {};
      * moment the page is going away: `visibilitychange` to hidden is the last
      * event a tab reliably gets before it is frozen or discarded, `pagehide`
      * covers a close or a full navigation, and `freeze` is Chrome saying so
-     * outright.
+     * outright. And once the tab IS hidden every read is written as it lands,
+     * because the discard that follows sends nothing to flush on.
      *
      * PERIODIC WRITES ARE CHAINED, NEVER CONCURRENT. Each one writes the whole
      * object, so two in flight could land out of order and the older snapshot
@@ -220,7 +221,13 @@ globalThis.Shelves = globalThis.Shelves || {};
             delete facts.saw;
             found.set(name, facts);
             cache[name] = facts;
-            if (++unsaved >= FLUSH_EVERY) flush();
+            /* HIDDEN, EVERY READ IS THE LAST ONE. A background tab is the only
+           * kind Chrome discards, and a discard sends no event at all — so
+           * the batch of ten that is right for a tab someone is watching is
+           * up to nine records thrown away for one nobody is. */
+          const behind = typeof document !== "undefined" &&
+                         document.visibilityState === "hidden";
+          if (++unsaved >= (behind ? 1 : FLUSH_EVERY)) flush();
           }
         } catch (e) {
           /* one unreachable repo must not sink the page (P.III) */
