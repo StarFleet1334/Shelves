@@ -375,9 +375,9 @@ globalThis.Shelves = globalThis.Shelves || {};
             const label = String(sug.label || "").trim().slice(0, 60);
             if (!label) return;
             if (sug.kind !== "topic" && sug.repos && sug.repos.length) {
-              const all = await S.overrides.read();
-              sug.repos.forEach((r) => { all[String(r).toLowerCase()] = label; });
-              await S.overrides.write(all);
+              const many = {};
+              sug.repos.forEach((r) => { many[String(r).toLowerCase()] = label; });
+              await S.overrides.setMany(many);
             }
             /* KEEPING WHAT IS ALREADY ON SCREEN. With no groups configured the
              * shelves are auto-derived from topics; the first group written

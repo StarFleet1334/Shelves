@@ -25,10 +25,12 @@
  * THE USER'S BROWSER IS NEVER TOUCHED EITHER. A fresh --user-data-dir in the
  * scratchpad, and the only process killed is the one this script started.
  *
- * Storage is read from the extension's own service worker — the content
- * script's isolated world is not reachable over CDP, and the SW is the same
- * chrome.storage.local the content script wrote to, so it is the honest
- * witness anyway.
+ * Storage is read from the extension's own service worker: it is the same
+ * chrome.storage.local the content script wrote to, and a witness outside
+ * the page that did the writing. (The content script's isolated world IS
+ * reachable over CDP — `Runtime.executionContextCreated` with auxData.type
+ * "isolated"; tests/crosstab-e2e.js evaluates in it — this file simply has
+ * no need to.)
  */
 "use strict";
 

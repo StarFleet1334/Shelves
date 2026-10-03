@@ -86,6 +86,59 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
   }
 
+  /* ---- one writer at a time, across every github.com tab -----------------
+   * EVERY STORE HERE IS ONE OBJECT, and chrome.storage has no transactions:
+   * a write replaces the whole value. So read-modify-write in two tabs at once
+   * is a lost update by construction — whichever lands last erases the other's
+   * work. The sharp case was the fact cache: a cold pass held its copy for
+   * minutes while the top-up in any other github.com tab held its own for ten
+   * seconds, and the later write took the earlier one's records with it.
+   * `notes`, `overrides`, `pins` and the shelf map have the same shape with a
+   * narrower window.
+   *
+   * Two fixes, and they fix different halves:
+   *
+   *   RE-READ AND MERGE AT THE MOMENT OF WRITING. A writer hands over only what
+   *     IT changed; the rest comes from the store as it stands now, not as it
+   *     stood when the writer started. That alone shrinks the window from
+   *     minutes to one storage round-trip.
+   *   AND HOLD A LOCK ACROSS THAT ROUND-TRIP. Every writer that matters is a
+   *     content script on github.com, and the Web Locks API is per ORIGIN — so
+   *     `navigator.locks` is a real mutual exclusion between those tabs, which
+   *     closes the round-trip too.
+   *
+   * THE LOCK IS AN AID, NEVER A GATE (P.III). A page script shares the origin
+   * and could hold the same name; a frozen tab could sit on it. So the wait is
+   * bounded, and past it — or with no Locks API at all (the options page's
+   * own origin, a harness) — the write proceeds merged but unlocked, which is
+   * still the first fix. A write that never happens is worse than a narrow
+   * race. In-tab writers are additionally queued per store, so two writes
+   * from one page can never interleave even where the lock is unavailable. */
+  const LOCK_WAIT_MS = 2000;
+  const queues = {};
+  function atomically(name, fn) {
+    const run = () => {
+      const locks = typeof navigator !== "undefined" && navigator && navigator.locks;
+      if (!locks || typeof locks.request !== "function") return fn();
+      let ctl = null;
+      try { ctl = new AbortController(); } catch (e) { /* no signal: wait unbounded */ }
+      const timer = ctl ? setTimeout(() => ctl.abort(), LOCK_WAIT_MS) : null;
+      const opts = ctl ? { signal: ctl.signal } : {};
+      return locks.request("shelves:" + name, opts, () => {
+        if (timer) clearTimeout(timer);
+        return fn();
+      }).catch((e) => {
+        if (timer) clearTimeout(timer);
+        if (e && e.name === "AbortError") return fn();   // waited long enough
+        throw e;
+      });
+    };
+    const next = (queues[name] || Promise.resolve()).then(run, run);
+    queues[name] = next.catch(() => {});
+    return next;
+  }
+  S._atomically = atomically;     // exposed for the harness, used nowhere else
+
   S.DEFAULTS = DEFAULTS;
 
   /** Settings + token, merged into one object for the caller's convenience. */
@@ -123,13 +176,42 @@ globalThis.Shelves = globalThis.Shelves || {};
    * seventy-six requests for an upgrade. */
 
   let epoch = 0;
+
+  /* THE STORE AS THIS TAB LAST SAW IT, kept current by every read, every
+   * write and every `onChanged` — for the one writer that cannot afford a
+   * round-trip (`putNow`). A copy, because callers mutate what `read` gives
+   * them. */
+  let mirror = null;
+  /* `put`s this tab has issued that have not landed, so a `putNow` can carry
+   * their records and they can carry its: see `putNow`. */
+  const pending = new Set();
+  const newer = (into, add) => {
+    Object.keys(add || {}).forEach((k) => {
+      const mine = add[k];
+      const theirs = into[k];
+      if (!mine) return;
+      if (!theirs || (mine.at || 0) >= (theirs.at || 0)) into[k] = mine;
+    });
+    return into;
+  };
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      const c = area === "local" && changes && changes[FACTS_KEY];
+      if (c) mirror = c.newValue && typeof c.newValue === "object" ? { ...c.newValue } : {};
+    });
+  } catch (e) {
+    /* no chrome.storage here — `putNow` falls back to what reads have shown */
+  }
+
   S.cache = {
     async read() {
       const got = await get("local", { [FACTS_KEY]: {}, [CACHE_KEY]: {} });
       const c = got[FACTS_KEY];
-      if (c && typeof c === "object" && Object.keys(c).length) return c;
       const old = got[CACHE_KEY];
-      return old && typeof old === "object" ? old : {};
+      const out = (c && typeof c === "object" && Object.keys(c).length) ? c
+        : (old && typeof old === "object" ? old : {});
+      mirror = { ...out };
+      return out;
     },
     /* IT NEVER FORGOT ANYTHING, AND THAT WAS THE BUG. There was no eviction
      * path in the whole extension: an entry written once lived forever, and
@@ -151,7 +233,58 @@ globalThis.Shelves = globalThis.Shelves || {};
        * there the write is exactly what it was. */
       const who = typeof S.viewer === "function" ? S.viewer() : "";
       const kept = S.cache.sweep(cache, who).cache;
-      return set("local", { [FACTS_KEY]: S.cache.prune(kept, settings) });
+      const out = S.cache.prune(kept, settings);
+      mirror = { ...out };
+      return set("local", { [FACTS_KEY]: out });
+    },
+    /* THE WRITE EVERY WRITER USES. `records` is only what this writer
+     * learned — never its whole copy — merged into the store as it stands
+     * now, under the lock. Per key the NEWER `at` wins, so a slow writer can
+     * never put back an older read of a repo another tab has since
+     * refreshed; and since the rest is re-read rather than carried, a key
+     * another tab added, or a clear that emptied the store, is respected.
+     * An empty `records` is still a write: the sweep and prune run against
+     * the store, which is how the top-up's cleanup lands without a snapshot.
+     * @returns {Promise<boolean>} */
+    put(records, settings) {
+      const job = { add: records && typeof records === "object" ? records : {},
+                    extra: {}, sent: false, late: {} };
+      pending.add(job);
+      const done = () => { pending.delete(job); };
+      return atomically(FACTS_KEY, async () => {
+        const now = await S.cache.read();
+        const merged = newer(newer({ ...now }, job.add), job.extra);
+        job.sent = true;
+        return S.cache.write(merged, settings);
+      }).then((ok) => {
+        done();
+        /* A `putNow` AFTER THIS ONE WAS SENT could not ride in it, and if this
+         * write landed second it erased that one's records. Put them back —
+         * a page alive to run this callback is alive to write once more. */
+        if (Object.keys(job.late).length) return S.cache.put(job.late, settings).then(() => ok);
+        return ok;
+      }, (e) => { done(); throw e; });
+    },
+    /* THE WRITE A DYING PAGE CAN STILL MAKE. `put` waits for a lock and a
+     * read, and both answer with a callback — a task, which a page being
+     * frozen or unloaded never runs, so the records a leaving handler exists
+     * to save would die in the queue. This one is issued in the same tick:
+     * merged onto the mirror instead of a fresh read, unlocked.
+     *
+     * Two `put`s from this tab may still be in flight beside it, and whichever
+     * lands second would otherwise erase the other. So it carries their
+     * records, and hands its own to each of them to carry — every write this
+     * tab makes from here on is a superset, in whatever order they land. The
+     * window left is another tab writing in the same instant, against a
+     * mirror one `onChanged` behind: one round-trip, once, at the moment the
+     * page goes away. */
+    putNow(records, settings) {
+      const add = records && typeof records === "object" ? records : {};
+      const merged = { ...(mirror || {}) };
+      pending.forEach((job) => { newer(newer(merged, job.add), job.extra); });
+      newer(merged, add);
+      pending.forEach((job) => { newer(job.sent ? job.late : job.extra, add); });
+      return S.cache.write(merged, settings);
     },
     /* ONLY THE READER'S OWN REPOSITORIES BELONG HERE. Rung 4 runs only on a
      * profile that is `isMine()`, so a record owned by anybody else is a
@@ -195,7 +328,8 @@ globalThis.Shelves = globalThis.Shelves || {};
      * store, and notes are the one part of it that is not). */
     clear() {
       epoch++;
-      return set("local", { [FACTS_KEY]: {}, [CACHE_KEY]: {} });
+      mirror = {};
+      return atomically(FACTS_KEY, () => set("local", { [FACTS_KEY]: {}, [CACHE_KEY]: {} }));
     },
     /* WHICH CLEAR THIS IS. A cold pass holds the whole cache in memory and
      * flushes it as it goes, so a `rescan` pressed mid-pass would be undone by
@@ -223,13 +357,15 @@ globalThis.Shelves = globalThis.Shelves || {};
     },
     /** Empty text REMOVES the key — an empty note is not a note, and keeping
      *  it would make the note marker lie about which rows carry one. */
-    async set(name, textIn) {
-      const notes = await this.read();
-      const t = String(textIn == null ? "" : textIn).trim().slice(0, 2000);
-      if (t) notes[String(name || "").toLowerCase()] = t;
-      else delete notes[String(name || "").toLowerCase()];
-      const ok = await this.write(notes);
-      return { ok, notes };
+    set(name, textIn) {
+      return atomically(NOTES_KEY, async () => {
+        const notes = await this.read();
+        const t = String(textIn == null ? "" : textIn).trim().slice(0, 2000);
+        if (t) notes[String(name || "").toLowerCase()] = t;
+        else delete notes[String(name || "").toLowerCase()];
+        const ok = await this.write(notes);
+        return { ok, notes };
+      });
     },
   };
 
@@ -263,15 +399,28 @@ globalThis.Shelves = globalThis.Shelves || {};
     /** An empty label REMOVES the override, so putting a repo back where its
      *  topics say it belongs needs no second verb — and cannot leave a key
      *  behind claiming an opinion the reader has withdrawn. */
-    async set(name, labelIn) {
-      const all = await this.read();
-      const key = String(name || "").toLowerCase();
-      const label = String(labelIn == null ? "" : labelIn).trim().slice(0, 60);
-      if (!key) return { ok: false, overrides: all };
-      if (label) all[key] = label;
-      else delete all[key];
-      const ok = await this.write(all);
-      return { ok, overrides: all };
+    set(name, labelIn) {
+      return this.setMany({ [String(name || "")]: labelIn });
+    },
+    /** Several in ONE locked read-modify-write. Accepting a suggestion pins
+     *  every repo it named, and doing that as a read in main.js and a write
+     *  later was the same lost update with the caller holding the stale copy. */
+    setMany(map) {
+      return atomically(OVER_KEY, async () => {
+        const all = await this.read();
+        let any = false;
+        Object.keys(map || {}).forEach((name) => {
+          const key = String(name || "").toLowerCase();
+          const label = String(map[name] == null ? "" : map[name]).trim().slice(0, 60);
+          if (!key) return;
+          any = true;
+          if (label) all[key] = label;
+          else delete all[key];
+        });
+        if (!any) return { ok: false, overrides: all };
+        const ok = await this.write(all);
+        return { ok, overrides: all };
+      });
     },
   };
 
@@ -297,14 +446,16 @@ globalThis.Shelves = globalThis.Shelves || {};
      *  they were pinned — which is the order the reader watched them rise in —
      *  and without a stamp the next load re-derived that block in GitHub's own
      *  source order instead, so the page quietly rearranged itself. */
-    async toggle(name, when) {
-      const all = await this.read();
-      const key = String(name || "").toLowerCase();
-      if (!key) return { ok: false, pins: all };
-      if (all[key]) delete all[key];
-      else all[key] = when || Date.now();
-      const ok = await this.write(all);
-      return { ok, pins: all, on: !!all[key] };
+    toggle(name, when) {
+      return atomically(PIN_KEY, async () => {
+        const all = await this.read();
+        const key = String(name || "").toLowerCase();
+        if (!key) return { ok: false, pins: all };
+        if (all[key]) delete all[key];
+        else all[key] = when || Date.now();
+        const ok = await this.write(all);
+        return { ok, pins: all, on: !!all[key] };
+      });
     },
   };
 
@@ -320,7 +471,10 @@ globalThis.Shelves = globalThis.Shelves || {};
    * asked for. */
   S.groups = {
     /** @param {string|string[]} labelIn — one shelf, or several in one write. */
-    async add(labelIn) {
+    add(labelIn) {
+      return atomically("groups", () => this._add(labelIn));
+    },
+    async _add(labelIn) {
       const want = (Array.isArray(labelIn) ? labelIn : [labelIn])
         .map((l) => String(l == null ? "" : l).trim().slice(0, 60))
         .filter(Boolean);
@@ -427,11 +581,15 @@ globalThis.Shelves = globalThis.Shelves || {};
       return { stores, added, kept, skipped };
     },
 
-    async restore(incoming) {
-      const current = await get("local", { [NOTES_KEY]: {}, [OVER_KEY]: {}, [PIN_KEY]: {} });
-      const res = this.merge(current, incoming);
-      const ok = await set("local", res.stores);
-      return { ok, ...res };
+    /* All three stores at once, so all three locks, always nested in the
+     * same order, so two restores can never deadlock each other. */
+    restore(incoming) {
+      return atomically(NOTES_KEY, () => atomically(OVER_KEY, () => atomically(PIN_KEY, async () => {
+        const current = await get("local", { [NOTES_KEY]: {}, [OVER_KEY]: {}, [PIN_KEY]: {} });
+        const res = this.merge(current, incoming);
+        const ok = await set("local", res.stores);
+        return { ok, ...res };
+      })));
     },
   };
 
@@ -495,7 +653,10 @@ globalThis.Shelves = globalThis.Shelves || {};
       const m = all && typeof all === "object" ? all[String(owner || "").toLowerCase()] : null;
       return m && typeof m === "object" ? m : null;
     },
-    async write(owner, map) {
+    write(owner, map) {
+      return atomically(MAP_KEY, () => this._write(owner, map));
+    },
+    async _write(owner, map) {
       const got = await get("local", { [MAP_KEY]: {} });
       const all = (got[MAP_KEY] && typeof got[MAP_KEY] === "object") ? got[MAP_KEY] : {};
       all[String(owner || "").toLowerCase()] = { ...map, at: Date.now() };

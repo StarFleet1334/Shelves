@@ -141,16 +141,28 @@ globalThis.Shelves = globalThis.Shelves || {};
     const born = S.cache.epoch();
     let forgotten = false;
     const gone = () => forgotten || (forgotten = S.cache.epoch() !== born);
-    const write = () => {
-      const n = unsaved;
+    /* ONLY WHAT THIS PASS LEARNED GOES OUT. Handing over the whole in-memory
+     * copy — read when the pass began, minutes ago — is what let a cold pass
+     * erase every record the top-up wrote from another tab meanwhile, and the
+     * top-up erase the pass's. `fresh` holds the records read since the last
+     * write that landed; `put` merges them into the store as it is NOW. */
+    let fresh = {};
+    const write = (now) => {
+      const batch = fresh;
+      fresh = {};
       unsaved = 0;
-      const back = () => { if (!gone()) unsaved += n; };
+      const back = () => {
+        if (gone()) return;
+        Object.keys(batch).forEach((k) => { if (!fresh[k]) fresh[k] = batch[k]; });
+        unsaved = Object.keys(fresh).length;
+      };
       /* CALLED, NOT SCHEDULED: the storage call leaves inside this very
        * tick, which is what lets a leaving handler issue it before the page
        * freezes. */
       let p;
       try {
-        p = Promise.resolve(S.cache.write(cache, settings));
+        p = Promise.resolve(now ? S.cache.putNow(batch, settings)
+                                : S.cache.put(batch, settings));
       } catch (e) {
         p = Promise.reject(e);
       }
@@ -164,7 +176,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     const leaving = (e) => {
       if (e && e.type === "visibilitychange" && document.visibilityState !== "hidden") return;
       if (!unsaved || gone()) return;
-      writing = write();
+      writing = write(true);
     };
     const emptied = (changes, area) => {
       const c = area === "local" && changes && changes.repoFacts;
@@ -221,6 +233,7 @@ globalThis.Shelves = globalThis.Shelves || {};
             delete facts.saw;
             found.set(name, facts);
             cache[name] = facts;
+          fresh[name] = facts;
             /* HIDDEN, EVERY READ IS THE LAST ONE. A background tab is the only
            * kind Chrome discards, and a discard sends no event at all — so
            * the batch of ten that is right for a tab someone is watching is

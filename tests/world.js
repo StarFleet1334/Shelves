@@ -176,7 +176,15 @@ function repoPage(repo, owner, name) {
 
 /* ---- the chrome.* stub ------------------------------------------------- */
 
-function makeChrome(store, onMessage) {
+/* ONE LIST OF onChanged LISTENERS PER STORE, NOT PER STUB. Real chrome fires
+ * `onChanged` in EVERY context of the extension — the tab that wrote and every
+ * other github.com tab — and the cross-tab scenarios are exactly about one
+ * tab hearing another's write. Keyed on the store object, so two worlds built
+ * over one store (`build({ store })`) hear each other, and a world with a
+ * store of its own hears only itself, exactly as before. */
+const LISTENERS = new WeakMap();
+
+function makeChrome(store, onMessage, how) {
   /* `onChanged` WAS A NO-OP, AND THAT MADE THE QUIET LIST UNTESTABLE.
    * main.js reloads the page on any storage key it did not expect, and the
    * exemption list is the only thing standing between "the reader pinned a
@@ -184,19 +192,30 @@ function makeChrome(store, onMessage) {
    * their open shelves with it". A stub that never fires cannot tell a
    * correct list from a forgotten entry — and one entry was forgotten.
    * Real enough to fire, which is all it takes. */
-  const listeners = [];
+  if (!LISTENERS.has(store)) LISTENERS.set(store, []);
+  const listeners = LISTENERS.get(store);
+  /* `clone`: VALUES CROSS THE STORAGE BOUNDARY AS COPIES, as they do in
+   * chrome, which serializes every get and set. By default the stub hands
+   * out the stored object itself — harmless for one tab, and a lie for two:
+   * a pass mutating its "copy" would be mutating the store, and a lost update
+   * would be hidden by aliasing the real thing never has. Opt-in, because
+   * scenarios written against the by-reference stub are left exactly as
+   * they were. */
+  const copy = how && how.clone ? (v) => (v === undefined ? v : JSON.parse(JSON.stringify(v)))
+                                : (v) => v;
   const area = (name) => ({
     get(defaults, cb) {
       const out = { ...defaults };
       for (const k of Object.keys(defaults)) {
-        if (store[name] && k in store[name]) out[k] = store[name][k];
+        if (store[name] && k in store[name]) out[k] = copy(store[name][k]);
       }
       setTimeout(() => cb(out), 0);
     },
-    set(obj, cb) {
+    set(objIn, cb) {
+      const obj = copy(objIn);
       store[name] = { ...(store[name] || {}), ...obj };
       const changes = {};
-      Object.keys(obj).forEach((k) => { changes[k] = { newValue: obj[k] }; });
+      Object.keys(obj).forEach((k) => { changes[k] = { newValue: copy(obj[k]) }; });
       setTimeout(() => {
         listeners.forEach((fn) => { try { fn(changes, name); } catch (e) {} });
       }, 0);
@@ -262,6 +281,78 @@ function bootWorker(fetchImpl, counters) {
   };
 }
 
+/* ---- the Web Locks API, which jsdom does not have ---------------------- */
+
+/* ONE LOCK MANAGER FOR SEVERAL WINDOWS, because `navigator.locks` is per
+ * ORIGIN: every github.com tab asks the same manager, which is the whole
+ * reason store.js can use it as a mutual exclusion between tabs. Install one
+ * object on two worlds (`build({ locks })`) and they contend for real.
+ *
+ * Exclusive per name, granted FIFO, the callback run a microtask after the
+ * grant (the real one never calls back synchronously), held until the
+ * callback's promise settles. `{signal}` withdraws a WAITING request with an
+ * AbortError, which is the only option store.js passes. No timers anywhere:
+ * a lock a scenario holds forever is a promise nobody settles, which keeps
+ * nothing alive.
+ *
+ * `stats` counts grants and aborts per name, and `maxHeld` is the most
+ * callbacks ever running at once under one name — 1, or the fake is wrong. */
+function makeLocks() {
+  const lines = {};
+  const stats = { grants: {}, aborted: {}, maxHeld: {}, waiting: {} };
+  const abortError = () => {
+    const e = new Error("the lock request was aborted");
+    e.name = "AbortError";
+    return e;
+  };
+  const line = (name) => lines[name] || (lines[name] = { held: 0, queue: [] });
+  function request(name, a, b) {
+    const opts = typeof a === "function" ? {} : (a || {});
+    const cb = typeof a === "function" ? a : b;
+    const ln = line(name);
+    return new Promise((resolve, reject) => {
+      const sig = opts.signal;
+      if (sig && sig.aborted) { reject(abortError()); return; }
+      const entry = {};
+      const onAbort = () => {
+        const i = ln.queue.indexOf(entry);
+        if (i === -1) return;                 // already granted: abort is moot
+        ln.queue.splice(i, 1);
+        stats.waiting[name] = ln.queue.length;
+        stats.aborted[name] = (stats.aborted[name] || 0) + 1;
+        reject(abortError());
+      };
+      const release = () => {
+        ln.held--;
+        const next = ln.queue.shift();
+        stats.waiting[name] = ln.queue.length;
+        if (next) next.grant();
+      };
+      entry.grant = () => {
+        if (sig) sig.removeEventListener("abort", onAbort);
+        ln.held++;
+        stats.grants[name] = (stats.grants[name] || 0) + 1;
+        stats.maxHeld[name] = Math.max(stats.maxHeld[name] || 0, ln.held);
+        Promise.resolve().then(() => cb({ name, mode: "exclusive" })).then(
+          (v) => { release(); resolve(v); },
+          (e) => { release(); reject(e); });
+      };
+      if (sig) sig.addEventListener("abort", onAbort);
+      if (!ln.held) entry.grant();
+      else { ln.queue.push(entry); stats.waiting[name] = ln.queue.length; }
+    });
+  }
+  return {
+    request,
+    query: async () => ({
+      held: Object.keys(lines).filter((n) => lines[n].held).map((name) => ({ name })),
+      pending: [].concat(...Object.keys(lines).map((n) =>
+        lines[n].queue.map(() => ({ name: n })))),
+    }),
+    stats,
+  };
+}
+
 /* ---- assembling a world ------------------------------------------------ */
 
 /**
@@ -292,6 +383,18 @@ function bootWorker(fetchImpl, counters) {
  *               `logged-out`, a header Sign in link. Leave `viewer` unset
  *   signedInNoMeta  signed in (body `logged-in`) but the user-login meta has
  *               moved — the "markup changed under us" shape of a real session
+ *   store       ANOTHER WORLD'S STORE, to stand a second tab on the same
+ *               chrome.storage: pass `other.store` and both worlds read and
+ *               write one object and hear each other's onChanged. The seed
+ *               options above (cache, notes, pins, settings, token...) are
+ *               then IGNORED — the store is already somebody's; seed it
+ *               through the first world
+ *   clone       storage values are COPIED on every get and set, as chrome
+ *               serializes them; off, the stub shares objects by reference
+ *               as it always has. Cross-tab scenarios want it on both worlds
+ *   locks       a `makeLocks()` manager installed as `navigator.locks`. Pass
+ *               the same one to both worlds of a cross-tab pair; omit it and
+ *               the page has no Locks API at all, as jsdom ships
  *
  * `counters.calls` lists every worker API request as {url, auth}, because
  * `lastAuth` only remembers the last one and "no request carried the token"
@@ -299,7 +402,7 @@ function bootWorker(fetchImpl, counters) {
  */
 function build(opts) {
   const owner = opts.owner || "octo";
-  const store = {
+  const store = opts.store || {
     sync: { ...(opts.settings || {}) },
     local: { token: opts.token || "", repoFacts: opts.cache || {},
              topicCache: opts.legacyCache || {},
@@ -347,6 +450,12 @@ function build(opts) {
     virtualConsole: vc,
   });
   const win = dom.window;
+  /* BEFORE THE SCRIPTS LOAD, as a browser's would be: nothing in store.js
+     caches the lookup, but a world should not be one where the API appears
+     halfway through the page's life. */
+  if (opts.locks) {
+    Object.defineProperty(win.navigator, "locks", { value: opts.locks, configurable: true });
+  }
 
   // What the API returns. A number means "fail with this status".
   const apiFetch = async (url) => {
@@ -388,7 +497,8 @@ function build(opts) {
   };
 
   const post = bootWorker(apiFetch, counters);
-  win.chrome = makeChrome(store, (msg, respond) => post(msg, respond));
+  win.chrome = makeChrome(store, (msg, respond) => post(msg, respond),
+                          { clone: !!opts.clone });
 
   // Same-origin fetches made by the content script: extra pages and repo pages.
   win.fetch = async (url) => {
@@ -569,5 +679,5 @@ function writeNote(win, repoName, text) {
 
 const settle = (ms) => new Promise((r) => setTimeout(r, ms || 700));
 
-module.exports = { build, readShelves, settle, type, writeNote, openVocab,
+module.exports = { build, makeLocks, readShelves, settle, type, writeNote, openVocab,
                    pickTerm, pickGap, readMark, profilePage, repoPage };

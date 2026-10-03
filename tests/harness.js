@@ -11,7 +11,7 @@
  */
 "use strict";
 
-const { build, readShelves, settle, type, writeNote, openVocab, pickTerm,
+const { build, makeLocks, readShelves, settle, type, writeNote, openVocab, pickTerm,
         pickGap, readMark, profilePage } = require("./world");
 
 let failures = 0;
@@ -344,6 +344,167 @@ function leave(w, type, state) {
 }
 
 const storedFacts = (w) => Object.keys(w.store.local.repoFacts || {});
+
+/* ── TWO TABS, ONE STORE ───────────────────────────────────────────────────
+   The "cross-tab" scenarios are about a lost update no single world can show:
+   every store is ONE object and chrome.storage has no transactions, so two
+   tabs each reading, changing and writing back the whole thing erase each
+   other — whichever lands last wins, wholesale. Two worlds built over one
+   store (`build({ store })`) read and write the same object and hear each
+   other's onChanged, as two github.com tabs do; `clone` makes every get and
+   set a copy, because a stub that shares objects by reference lets a tab
+   mutate the store through its "copy" and hides exactly the loss under test;
+   and `locks` is one `makeLocks()` manager on both, which is what
+   `navigator.locks` is between same-origin tabs. Omitted, the pages have no
+   Locks API at all and the unlocked half of the fix is what runs. */
+const DAY = 86400000;
+/* WHAT BOTH TABS READ. A profile pass reads m00..m24 in order at concurrency
+   1, so m00/m01 land in its first flush, m10/m11 are the two it has read but
+   not yet written when it is paused at twelve, and m20/m21 are still ahead of
+   it. Seeded stale (eight days, past a seven-day TTL), so the pass re-reads
+   them AND the top-up finds them due. */
+const OVERLAP = ["m00", "m01", "m10", "m11", "m20", "m21"];
+/* WHAT ONLY THE TOP-UP READS: cached, the reader's own, and not on the
+   profile page — so a pass writing its whole copy back can only ever put the
+   stale seed over the refresh. */
+const ONLY_WARM = ["x1", "x2", "x3"];
+const WARM_ON = { cacheDays: 7, warmBatch: 10, prewarm: true };
+
+/* EVERY RECORD A WORLD'S OWN PARSE PRODUCED, by name — the pass's reads in
+   one, the top-up's in the other — so "the newer one won" is checked against
+   what each tab actually had, not against a timestamp the scenario guessed. */
+function recordReads(w) {
+  const S = w.win.Shelves;
+  const got = {};
+  const real = S.factsFrom;
+  S.factsFrom = function (doc, name) {
+    const f = real.apply(this, arguments);
+    if (f && typeof f === "object") got[name] = f;
+    return f;
+  };
+  return got;
+}
+
+/* THE PAIR: tab A on the reader's own profile, a cold pass of 25 rung-4 rows
+   behind a gate; tab B on one of their repo pages, its top-up's fetches behind
+   a gate of its own. Nothing moves until a scenario lets it. */
+function crossPair(locked) {
+  const now = Date.now();
+  const cache = {};
+  OVERLAP.concat(ONLY_WARM).forEach((n, i) => {
+    cache["octo/" + n] = { at: now - 8 * DAY - i * 60000, topics: [], description: "a stale seed" };
+  });
+  const locks = locked ? makeLocks() : null;
+  const a = build({
+    viewer: "octo", owner: "octo", clone: true, locks,
+    settings: { groups: ["keep"], concurrency: 1, scrapeMax: 0 },
+    apiRepos: [],
+    repos: midPassRepos(25),
+    cache,
+  });
+  const b = build({
+    store: a.store, clone: true, locks,
+    viewer: "octo", owner: "octo", at: "octo/throttle-kit", page: { topics: ["rag"] },
+    repos: OVERLAP.concat(ONLY_WARM).map((n) => ({
+      name: n, topics: ["warm"], description: "from the top-up",
+    })),
+  });
+  return { a, b, locks, ta: midPass(a, { gate: true }), tb: midPass(b, { gate: true }),
+           ra: recordReads(a), rb: recordReads(b) };
+}
+
+/* Let the pass read, one page at a time, until it has read `n`. */
+async function passReads(p, n) {
+  for (let i = 0; i < 4 * n && p.a.counters.scraped.length < n; i++) {
+    p.ta.release(1);
+    await settle(25);
+  }
+}
+
+/* Answer the top-up's fetches one at a time until its run settles. */
+async function warmThrough(p, run) {
+  let over = false;
+  const out = run.then((r) => { over = true; return r; });
+  for (let i = 0; i < 80 && !over; i++) { p.tb.release(1); await settle(25); }
+  return out;
+}
+
+/* THE VERDICT BOTH ORDERS SHARE. Every record either tab read must be in the
+   store, and where both read one repo the store holds the read with the newer
+   `at` — never the older one put back by whoever wrote last. */
+function crossVerdict(ctx, p, tag) {
+  const fin = p.a.store.local.repoFacts || {};
+  const aRead = Object.keys(p.ra).filter((k) => /^octo\/m\d\d$/.test(k));
+  const bRead = Object.keys(p.rb).filter((k) => /^octo\/[mx]\d+$/.test(k));
+  const lostA = aRead.filter((k) => !fin[k]);
+  const lostB = bRead.filter((k) => !fin[k]);
+  assert(ctx, aRead.length === 25 && lostA.length === 0,
+    tag + ": every record the profile pass read must be stored, read " + aRead.length +
+    ", missing " + lostA.length + ": " + lostA.join());
+  assert(ctx, lostB.length === 0,
+    tag + ": every record the top-up refreshed must be stored, missing " + lostB.length +
+    ": " + lostB.join());
+  const keys = [...new Set(aRead.concat(bRead))];
+  const stale = keys.filter((k) => {
+    const want = Math.max((p.ra[k] || {}).at || 0, (p.rb[k] || {}).at || 0);
+    return fin[k] && fin[k].at !== want;
+  });
+  assert(ctx, stale.length === 0,
+    tag + ": each repo must hold the NEWEST read of it, older or seed records in " +
+    stale.length + ": " + stale.map((k) => k.slice(5) + "@" +
+      (fin[k].description === "a stale seed" ? "seed"
+        : p.rb[k] && fin[k].at === p.rb[k].at ? "top-up" : "pass")).join(", "));
+  const both = OVERLAP.map((n) => "octo/" + n).filter((k) => p.ra[k] && p.rb[k]);
+  const byB = both.filter((k) => fin[k] && p.rb[k].at > p.ra[k].at && fin[k].at === p.rb[k].at);
+  return { stored: Object.keys(fin).length, both: both.length, byB: byB.length };
+}
+
+/* TWO REPO-PAGE TABS over one store — nothing on either page writes on its
+   own, so every storage call in the window is the scenario's. */
+function twoTabs(locked) {
+  const locks = locked ? makeLocks() : null;
+  const a = build({ viewer: "octo", owner: "octo", clone: true, locks,
+                    at: "octo/one", page: { topics: [] }, repos: [] });
+  const b = build({ store: a.store, clone: true, locks,
+                    viewer: "octo", owner: "octo", at: "octo/two", page: { topics: [] }, repos: [] });
+  return { a, b, locks };
+}
+
+/* SLOW STORAGE, AND A WITNESS TO OVERLAP. Every local `set` touching one of
+   `keys` lands `ms` later — the value too, not just the callback, which is
+   what a slow write is to anyone reading meanwhile. And each tab's
+   read-modify-write is watched from its `get` to the landing of its `set`: a
+   `get` of a key while ANOTHER tab's window on that key is open is an
+   overlap, the shape of every lost update here. Arm it once the pages have
+   settled, so their own loading reads are not counted. */
+function slowStorage(worlds, keys, ms) {
+  const rmw = { armed: false, open: {}, overlaps: {}, gets: 0 };
+  worlds.forEach((w, id) => {
+    const local = w.win.chrome.storage.local;
+    const getReal = local.get;
+    const setReal = local.set;
+    local.get = (defaults, cb) => {
+      if (rmw.armed) {
+        Object.keys(defaults || {}).filter((k) => keys.includes(k)).forEach((k) => {
+          rmw.gets++;
+          const others = Object.keys(rmw.open[k] || {}).filter((o) => Number(o) !== id);
+          if (others.length) rmw.overlaps[k] = (rmw.overlaps[k] || 0) + 1;
+          (rmw.open[k] = rmw.open[k] || {})[id] = true;
+        });
+      }
+      return getReal(defaults, cb);
+    };
+    local.set = (obj, cb) => {
+      const hit = Object.keys(obj || {}).filter((k) => keys.includes(k));
+      if (!hit.length) return setReal(obj, cb);
+      setTimeout(() => setReal(obj, () => {
+        hit.forEach((k) => { if (rmw.open[k]) delete rmw.open[k][id]; });
+        if (cb) cb();
+      }), ms);
+    };
+  });
+  return rmw;
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -935,6 +1096,339 @@ const SCENARIOS = [
       "the last write and the store hold all 25, last " + sizes[sizes.length - 1] +
       ", stored " + storedFacts(w).length);
     ctx.info = "writes " + sizes.join(" → ") + ", max in flight " + t.maxInFlight;
+  }),
+
+  check("cross-tab — the top-up cannot erase a live profile run", async (ctx) => {
+    /* THE TOP-UP HELD ITS COPY ACROSS THE PASS'S WRITE. warm.js read the whole
+       cache, spent ten seconds fetching, and wrote the whole cache back — so
+       everything a cold pass on the profile tab had put down in those ten
+       seconds was erased by a tab that never knew it existed. If the profile
+       tab then dies (closed, discarded), those reads are gone for good.
+
+       Order: the top-up reads the store while it is still all seeds; the pass
+       reads twelve and flushes ten; THEN the top-up's fetches are answered and
+       it writes. The moment that matters is right after that write. Run with
+       no Locks API and with one, because the merge must hold on its own. */
+    const told = [];
+    for (const locked of [false, true]) {
+      const tag = locked ? "locked" : "no Locks API";
+      const p = crossPair(locked);
+      await settle(400);
+      const run = p.b.win.Shelves.warm(WARM_ON, { gap: 0 });
+      await settle(60);
+      assert(ctx, p.tb.queue.length === 1 && p.a.counters.scraped.length === 0,
+        tag + ": fixture — the top-up must be waiting on its first fetch before the pass " +
+        "reads anything, waiting " + p.tb.queue.length + ", pass read " +
+        p.a.counters.scraped.length);
+
+      await passReads(p, 12);
+      const mid = p.a.store.local.repoFacts || {};
+      const flushed = Object.keys(p.ra).filter((k) => mid[k] && mid[k].at === p.ra[k].at);
+      assert(ctx, flushed.length >= 10,
+        tag + ": fixture — the pass must have flushed its first ten, stored " + flushed.length);
+
+      const out = await warmThrough(p, run);
+      assert(ctx, out.warmed === OVERLAP.length + ONLY_WARM.length,
+        tag + ": the top-up refreshes all " + (OVERLAP.length + ONLY_WARM.length) +
+        " it found stale, got " + JSON.stringify(out));
+      /* THE BUG, AT THE INSTANT IT HAPPENED. */
+      const after = p.a.store.local.repoFacts || {};
+      const erased = flushed.filter((k) => !after[k] || after[k].at < p.ra[k].at);
+      assert(ctx, erased.length === 0,
+        tag + ": the top-up's write must keep every record the pass had stored, erased " +
+        erased.length + " of " + flushed.length + ": " + erased.join());
+
+      await passReads(p, 25);
+      await settle(300);
+      const v = crossVerdict(ctx, p, tag);
+      told.push(tag + ": " + flushed.length + " kept through the top-up, " + v.stored +
+        " stored, top-up newer on " + v.byB + " of " + v.both + " shared");
+    }
+    ctx.info = told.join("; ");
+  }),
+
+  check("cross-tab — the profile run cannot erase the top-up's refresh", async (ctx) => {
+    /* THE OTHER ORDER, AND THE LONGER WINDOW. The pass read its copy when it
+       began — minutes ago, on a big account — and every flush wrote that
+       copy back whole, so a top-up that ran in another tab meanwhile was
+       quietly reverted to the seeds it had just replaced. Sharper still: m10
+       and m11 are read by the pass and NOT YET WRITTEN when the top-up
+       refreshes them, so the pass's later flush is an OLDER read of the same
+       repo arriving second. Newer `at` must win, not later write. */
+    const told = [];
+    for (const locked of [false, true]) {
+      const tag = locked ? "locked" : "no Locks API";
+      const p = crossPair(locked);
+      await settle(400);
+      await passReads(p, 12);
+      const mid = p.a.store.local.repoFacts || {};
+      const unsaved = ["octo/m10", "octo/m11"].filter((k) => p.ra[k] && mid[k] &&
+                                                       mid[k].description === "a stale seed");
+      assert(ctx, unsaved.length === 2,
+        tag + ": fixture — m10 and m11 must be read by the pass and not yet stored, got " +
+        unsaved.join());
+
+      const out = await warmThrough(p, p.b.win.Shelves.warm(WARM_ON, { gap: 0 }));
+      /* m00/m01 the pass already stored fresh, so they are not due: 9 - 2. */
+      assert(ctx, out.warmed === 7 && p.rb["octo/m10"] && p.rb["octo/x1"],
+        tag + ": the top-up refreshes the 7 still stale, m10 among them, got " +
+        JSON.stringify(out));
+      /* By name: the repo page B stands on is parsed too, and is no refresh. */
+      const landed = Object.keys(p.rb).filter((k) => /^octo\/[mx]\d+$/.test(k) &&
+        (p.a.store.local.repoFacts[k] || {}).at === p.rb[k].at);
+
+      await passReads(p, 25);
+      await settle(300);
+      const fin = p.a.store.local.repoFacts || {};
+      const reverted = landed.filter((k) => !fin[k] || fin[k].at < p.rb[k].at);
+      assert(ctx, reverted.length === 0,
+        tag + ": no later flush of the pass may take back a newer refresh, reverted " +
+        reverted.length + " of " + landed.length + ": " + reverted.join());
+      const v = crossVerdict(ctx, p, tag);
+      told.push(tag + ": " + landed.length + " refreshed, " + reverted.length +
+        " reverted, top-up newer on " + v.byB + " of " + v.both + " shared");
+    }
+    ctx.info = told.join("; ");
+  }),
+
+  check("cross-tab — a slow older write does not clobber a newer record", async (ctx) => {
+    /* LATER IS NOT NEWER. A put carries what its writer READ, and a writer
+       that read a page a minute ago can reach the store after one that read it
+       a second ago. Per key the newer `at` wins, whichever arrives second.
+
+       Then the same race with the older write genuinely in flight while the
+       newer one is issued. Locked, the second waits for the first to land and
+       merges onto it. Unlocked it is the narrow window the lock exists to
+       close — one storage round-trip — and the scenario says which way it
+       went rather than pretending the merge alone covers it. */
+    const told = [];
+    for (const locked of [false, true]) {
+      const tag = locked ? "locked" : "no Locks API";
+      const { a, b } = twoTabs(locked);
+      await settle(300);
+      const SA = a.win.Shelves;
+      const SB = b.win.Shelves;
+      const T = Date.now();
+      const rec = (at, d) => ({ at, topics: [d], description: d });
+
+      const k = "octo/kit";
+      await SB.cache.put({ [k]: rec(T, "newer") }, WARM_ON);
+      const late = await SA.cache.put({ [k]: rec(T - 60000, "older") }, WARM_ON);
+      const got = (a.store.local.repoFacts || {})[k] || {};
+      assert(ctx, late !== false && got.at === T && got.description === "newer",
+        tag + ": an older read arriving second must not replace the newer one, store holds " +
+        JSON.stringify(got.description) + " (put said " + late + ")");
+
+      const k2 = "octo/kit-two";
+      slowStorage([a], ["repoFacts"], 150);
+      const pa = SA.cache.put({ [k2]: rec(T - 60000, "older") }, WARM_ON);
+      await settle(20);
+      const pb = SB.cache.put({ [k2]: rec(T, "newer") }, WARM_ON);
+      await Promise.all([pa, pb]);
+      await settle(50);
+      const got2 = (a.store.local.repoFacts || {})[k2] || {};
+      if (locked) {
+        assert(ctx, got2.description === "newer",
+          tag + ": with the lock, a newer put issued while an older one is landing must " +
+          "survive it, store holds " + JSON.stringify(got2.description));
+      }
+      const kept = (a.store.local.repoFacts || {})[k] || {};
+      assert(ctx, kept.description === "newer",
+        tag + ": and the first key must be untouched by the second race, holds " +
+        JSON.stringify(kept.description));
+      told.push(tag + ": arrived-second older lost; in flight → " + got2.description);
+    }
+    ctx.info = told.join("; ");
+  }),
+
+  check("cross-tab — two tabs pinning and noting at once keep both", async (ctx) => {
+    /* THE SMALL STORES HAD THE SAME SHAPE. pins.toggle, notes.set and
+       overrides.set each read the whole map, changed one key and wrote the
+       whole map back — so two tabs doing it in the same storage round-trip
+       kept one tab's change and silently dropped the other's. Rarer than the
+       fact cache, and worse when it happens: a note is the reader's own words
+       and nothing re-derives it.
+
+       Writes are slowed (they LAND 60ms late) and all six are fired without
+       waiting. With one lock manager on both tabs, each read-modify-write must
+       run alone and all six must survive. Without one, nothing closes the
+       round-trip — the overlap witness must see the race happen (or this
+       fixture proves nothing), and what survives is reported, not asserted. */
+    const told = [];
+    const KEYS = ["pins", "notes", "overrides"];
+    for (const locked of [true, false]) {
+      const tag = locked ? "locked" : "no Locks API";
+      const { a, b, locks } = twoTabs(locked);
+      await settle(300);
+      const rmw = slowStorage([a, b], KEYS, 60);
+      rmw.armed = true;
+      const SA = a.win.Shelves;
+      const SB = b.win.Shelves;
+      const res = await Promise.all([
+        SA.pins.toggle("octo/from-a", 1), SB.pins.toggle("octo/from-b", 2),
+        SA.notes.set("octo/from-a", "a's note"), SB.notes.set("octo/from-b", "b's note"),
+        SA.overrides.set("octo/from-a", "shelf-a"), SB.overrides.set("octo/from-b", "shelf-b"),
+      ]);
+      await settle(100);
+      const L = a.store.local;
+      const have = KEYS.map((k) => ["octo/from-a", "octo/from-b"]
+        .filter((r) => L[k] && L[k][r]).length);
+      const kept = have.reduce((s, n) => s + n, 0);
+      const overlaps = KEYS.reduce((s, k) => s + (rmw.overlaps[k] || 0), 0);
+      if (locked) {
+        assert(ctx, res.every((r) => r && r.ok),
+          tag + ": every write must report ok, got " + res.map((r) => r && r.ok).join());
+        assert(ctx, kept === 6,
+          tag + ": all six must survive (pins/notes/overrides " + have.join("/") + " of 2/2/2)");
+        assert(ctx, overlaps === 0,
+          tag + ": no tab may read a store while another's write to it is still landing, " +
+          "overlaps " + JSON.stringify(rmw.overlaps));
+        const via = KEYS.map((k) => (locks.stats.grants["shelves:" + k] || 0));
+        const most = KEYS.map((k) => (locks.stats.maxHeld["shelves:" + k] || 0));
+        assert(ctx, via.every((n) => n === 2) && most.every((n) => n === 1),
+          tag + ": each store's two writes must each take its lock, one at a time — grants " +
+          via.join("/") + ", most held at once " + most.join("/"));
+        assert(ctx, L.notes["octo/from-a"] === "a's note" && L.overrides["octo/from-b"] === "shelf-b",
+          tag + ": and the values are each tab's own");
+      } else {
+        assert(ctx, overlaps > 0,
+          tag + ": fixture — unlocked, the writes must genuinely overlap or this proves " +
+          "nothing, overlaps " + JSON.stringify(rmw.overlaps));
+      }
+      told.push(tag + ": kept " + kept + "/6 (" + have.join("/") + "), overlaps " + overlaps);
+    }
+    ctx.info = told.join("; ");
+  }),
+
+  check("cross-tab — a held lock never blocks a write", async (ctx) => {
+    /* THE LOCK IS AN AID, NEVER A GATE. A page script shares the github.com
+       origin and can take the very name store.js uses; a frozen tab can sit on
+       it. Here something holds "shelves:notes" and never lets go. The note
+       must still land — after the bounded wait, about two seconds — and a
+       store with a different lock must not wait at all. */
+    const locks = makeLocks();
+    const w = build({ viewer: "octo", owner: "octo", clone: true, locks,
+                      at: "octo/one", page: { topics: [] }, repos: [] });
+    await settle(300);
+    const S = w.win.Shelves;
+    locks.request("shelves:notes", () => new Promise(() => {}));   // never released
+
+    const p0 = Date.now();
+    const pin = await S.pins.toggle("octo/elsewhere", 1);
+    const pinMs = Date.now() - p0;
+    assert(ctx, pin.ok && pinMs < 500,
+      "a different store's lock is free, so a pin must not wait, took " + pinMs + "ms");
+
+    const t0 = Date.now();
+    const r = await S.notes.set("octo/held", "written anyway");
+    const ms = Date.now() - t0;
+    assert(ctx, r && r.ok && (w.store.local.notes || {})["octo/held"] === "written anyway",
+      "the note must land even with its lock held forever, got " + JSON.stringify(r && r.ok) +
+      " / " + JSON.stringify((w.store.local.notes || {})["octo/held"]));
+    assert(ctx, ms >= 1500 && ms < 4000,
+      "after the bounded wait — it must try the lock (~2s), and never wait unbounded, took " +
+      ms + "ms");
+    assert(ctx, (locks.stats.aborted["shelves:notes"] || 0) === 1 &&
+                (locks.stats.waiting["shelves:notes"] || 0) === 0,
+      "and the abandoned request must be withdrawn, not left queued behind the holder, " +
+      "aborted " + locks.stats.aborted["shelves:notes"] + ", waiting " +
+      locks.stats.waiting["shelves:notes"]);
+    ctx.info = "pin " + pinMs + "ms; held note landed after " + ms + "ms";
+  }),
+
+  check("cross-tab — the leaving write keeps an in-flight put's records", async (ctx) => {
+    /* TWO WRITES FROM ONE TAB, EITHER ORDER. The pass's batch `put` waits on a
+       read (and a lock); the leaving handler cannot wait for anything, so its
+       `putNow` goes straight out on the mirror. Each carries only part of what
+       the tab has read — and whichever lands second would otherwise erase the
+       other's part.
+
+       STILL READING: the put's read is slow, so `putNow` lands FIRST and the
+       put, landing last, must carry the leaving records it was handed.
+       WRITTEN, UNACKNOWLEDGED: the put's write is in storage but its callback
+       has not come back, so it is still pending when `putNow` goes — which
+       lands last and must carry the put's batch. */
+    const told = [];
+    for (const how of ["still reading", "written, unacknowledged"]) {
+      const w = build({
+        viewer: "octo", owner: "octo", clone: true,
+        settings: { groups: ["keep"], concurrency: 1, scrapeMax: 0 },
+        apiRepos: [],
+        repos: midPassRepos(25),
+      });
+      const t = midPass(w, { gate: true });
+      await settle(400);
+      const local = w.win.chrome.storage.local;
+      let armed = true;
+      if (how === "still reading") {
+        const getReal = local.get;
+        local.get = (d, cb) => {
+          if (!armed || !d || !("repoFacts" in d)) return getReal(d, cb);
+          armed = false;
+          return getReal(d, (out) => setTimeout(() => cb(out), 250));
+        };
+      } else {
+        const setNext = local.set;   // midPass's ledger, which lands it at once
+        local.set = (obj, cb) => {
+          if (!armed || !obj || !("repoFacts" in obj)) return setNext(obj, cb);
+          armed = false;
+          return setNext(obj, () => setTimeout(() => cb && cb(), 250));
+        };
+      }
+      for (let i = 0; i < 10; i++) { t.release(1); await settle(25); }
+      assert(ctx, !armed,
+        how + ": fixture — the tenth read must have started the batch put");
+      for (let i = 0; i < 3; i++) { t.release(1); await settle(25); }
+      const before = t.writes.length;
+      leave(w, "visibilitychange");
+      await settle(500);
+      const read = w.counters.scraped.slice().sort();
+      const kept = storedFacts(w).sort();
+      const lost = read.filter((k) => !kept.includes(k));
+      assert(ctx, read.length === 13,
+        how + ": fixture — 13 read before leaving, read " + read.length);
+      assert(ctx, t.writes.length - before >= 1 && t.writes.length >= 2,
+        how + ": both writes must have gone out, " + t.writes.length + " in all");
+      assert(ctx, lost.length === 0,
+        how + ": the store must hold every record read, whichever write landed last — " +
+        "lost " + lost.length + ": " + lost.join() + " (writes " +
+        t.writes.map((k) => k.length).join(" → ") + ")");
+      told.push(how + ": writes " + t.writes.map((k) => k.length).join(" → ") +
+        ", stored " + kept.length + "/13");
+    }
+    ctx.info = told.join("; ");
+  }),
+
+  check("cross-tab — a sent write that lands after the leaving one puts it back", async (ctx) => {
+    /* THE ONE ORDER THE HAND-OFF CANNOT COVER. Once a `put` has computed its
+       merge and sent its write, a `putNow` can no longer ride inside it — and
+       if that sent write lands SECOND it erases the leaving records. Real
+       chrome delivers one tab's writes in order, so this is the paranoid
+       case; it is still a case, and a page alive to see the late write land
+       is alive to write once more. */
+    const w = build({ viewer: "octo", owner: "octo", clone: true, at: "octo/one",
+                      page: { topics: [] }, repos: [] });
+    await settle(300);
+    const S = w.win.Shelves;
+    const local = w.win.chrome.storage.local;
+    const real = local.set;
+    let first = true;
+    local.set = (o, cb) => {
+      if (first && o && o.repoFacts) {
+        first = false;
+        setTimeout(() => real(o, cb), 200);       // sent now, lands last
+      } else real(o, cb);
+    };
+    const now = Date.now();
+    const p = S.cache.put({ "octo/a": { at: now, topics: [] } }, { cacheDays: 7 });
+    await settle(30);
+    await S.cache.putNow({ "octo/b": { at: now, topics: [] } }, { cacheDays: 7 });
+    await p;
+    await settle(80);
+    const kept = Object.keys(w.store.local.repoFacts || {}).sort();
+    assert(ctx, kept.join() === "octo/a,octo/b",
+      "both the batch and the leaving record must survive the reorder, stored: " + kept.join());
+    ctx.info = "late write landed second; stored " + kept.join();
   }),
 
   check("token-fallback — a dead token falls back to the public API, not to 76 page reads",

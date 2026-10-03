@@ -75,7 +75,9 @@ globalThis.Shelves = globalThis.Shelves || {};
     const read = await S.cache.read();
     const viewer = S.viewer ? S.viewer() : "";
     const { cache, dropped: swept } = S.cache.sweep(read, viewer);
-    if (swept) await S.cache.write(cache, settings);
+    /* `put` with nothing to add: the sweep runs against the store as it
+     * stands, so a profile tab writing right now keeps what it wrote. */
+    if (swept) await S.cache.put({}, settings);
 
     if (!settings.prewarm) return { warmed: 0, swept, why: "off" };
     if (S.isRepoTab()) return { warmed: 0, why: "the profile tab warms itself", swept };
@@ -108,6 +110,11 @@ globalThis.Shelves = globalThis.Shelves || {};
 
     let warmed = 0;
     let why = "";
+    /* WHAT THIS VISIT REFRESHED, AND NOTHING ELSE, is what gets written.
+     * The copy read ten seconds ago is not the store any more: a cold pass on
+     * the profile tab may have written eighty records since, and writing the
+     * copy back erased every one of them. */
+    const refreshed = {};
     for (const name of due) {
       if (!visible()) { why = "tab hidden partway"; break; }
       try {
@@ -123,6 +130,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         facts.at = Date.now();
         delete facts.saw;          // a parse's evidence is not a repo's fact
         cache[name] = facts;
+        refreshed[name] = facts;
         warmed++;
       } catch (e) {
         why = "stopped on a network error";
@@ -131,7 +139,7 @@ globalThis.Shelves = globalThis.Shelves || {};
       await sleep(o.gap == null ? GAP_MS : o.gap);
     }
 
-    if (warmed) await S.cache.write(cache, settings);
+    if (warmed) await S.cache.put(refreshed, settings);
     return { warmed, swept, why: why || "topped up " + warmed + " of " + due.length };
   };
 
