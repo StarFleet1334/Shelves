@@ -96,8 +96,9 @@ loads.
 
 The first load asks the GitHub API once, and one request answers every public
 repository you own. Only what it cannot see — your private repos — is read a
-page at a time, behind a progress line: `reading topics from repo pages 34/76 —
-cached after this`. On the 77-repo account this was last measured against that
+page at a time, behind a progress line: `reading repo pages 34/76 — cached as
+it goes`. It is written to the cache every ten pages and again the moment the
+tab is hidden or closed, so a pass you walk away from keeps what it read. On the 77-repo account this was last measured against that
 came to **one API call and no repo-page reads at all**; an account that is
 mostly private is ten to twenty seconds. Every load after that is instant.
 

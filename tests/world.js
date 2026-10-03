@@ -214,7 +214,13 @@ function makeChrome(store, onMessage) {
     storage: {
       sync: area("sync"),
       local: area("local"),
-      onChanged: { addListener(fn) { listeners.push(fn); } },
+      onChanged: {
+        addListener(fn) { listeners.push(fn); },
+        removeListener(fn) {
+          const i = listeners.indexOf(fn);
+          if (i !== -1) listeners.splice(i, 1);
+        },
+      },
     },
   };
 }

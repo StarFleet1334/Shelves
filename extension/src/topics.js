@@ -47,6 +47,11 @@ globalThis.Shelves = globalThis.Shelves || {};
     await Promise.all(workers);
   }
 
+  /* HOW MANY FRESH RECORDS A COLD PASS MAY HOLD UNWRITTEN. Ten is about two
+   * seconds of reading at concurrency six, and one storage write per ten repo
+   * pages is noise beside the ten requests that earned it. */
+  const FLUSH_EVERY = 10;
+
   /* MEASURED (charter §7): a repo's OWN page carries its topics in the
    * sidebar, and a same-origin fetch here rides the user's session cookie —
    * the only route to a private repo's topics without a credential. */
@@ -82,7 +87,7 @@ globalThis.Shelves = globalThis.Shelves || {};
      * see and answer instead of one that simply happens.
      *
      * THE CACHE IS WHAT MAKES *CONTINUE* CHEAP. Everything read on this pass
-     * is written below, so asking for the rest re-reads none of it: a second
+     * is written as it is read, so asking for the rest re-reads none of it: a second
      * pass with the ceiling lifted fetches exactly the ones deferred here.
      *
      * A ceiling of 0 or less is read as "no ceiling", so a reader who wants
@@ -96,51 +101,142 @@ globalThis.Shelves = globalThis.Shelves || {};
     let halted = 0;          // the status GitHub stopped us with, if any
     if (onProgress) onProgress(0, todo.length);
 
-    await pool(todo, settings.concurrency, async (name) => {
-      /* STOP WHEN GITHUB SAYS STOP. Measured against a server answering 429 to
-       * everything: this loop issued all forty requests anyway, and showed the
-       * reader a page of Ungrouped repos with no explanation at all. It is the
-       * highest-volume path in the extension — hundreds of authenticated
-       * same-origin fetches — and it was the only one with no backoff, while
-       * warm.js, which makes six, had one. That asymmetry is how a convenience
-       * gets somebody rate-limited on their own account. */
-      if (halted) return;
+    /* ── PAY ONCE MEANS WRITE AS YOU GO ─────────────────────────────────────
+     * The pass used to write its cache once, after the LAST fetch landed.
+     * `S.session` is memory only, so a reader who closed the tab, or left it
+     * in the background long enough to be discarded, twenty fetches into a
+     * hundred lost all twenty — and the next visit paid for them again.
+     * P.VIII held only for a pass that ran to the end, which is exactly the
+     * pass a slow cold run is least likely to be.
+     *
+     * So the records are flushed every FLUSH_EVERY reads, and once more the
+     * moment the page is going away: `visibilitychange` to hidden is the last
+     * event a tab reliably gets before it is frozen or discarded, `pagehide`
+     * covers a close or a full navigation, and `freeze` is Chrome saying so
+     * outright.
+     *
+     * PERIODIC WRITES ARE CHAINED, NEVER CONCURRENT. Each one writes the whole
+     * object, so two in flight could land out of order and the older snapshot
+     * would win. `unsaved` counts reads not yet handed to a write, so a flush
+     * with nothing new is free, and a write that FAILS hands its count back
+     * so the next flush retries it rather than believing it landed.
+     *
+     * THE LAST-CHANCE WRITE DOES NOT QUEUE. Chained behind a write still in
+     * flight, it would wait for a storage callback — a task, and a frozen or
+     * unloading page runs no more tasks — so the records it exists to save
+     * would die in the queue. It is issued from inside the handler instead.
+     * Every snapshot is a superset of the one before it, so the worst a
+     * reordering can do is let the previous snapshot land second, which costs
+     * the records since then and never anything older.
+     *
+     * A CLEARED CACHE STAYS CLEARED. `rescan` here, or Clear in the options
+     * page, empties the store while this pass still holds the old records in
+     * memory; the next flush would have written them all back and the reload
+     * would have found the cache it was told to forget. So the pass stops —
+     * no more writes, no more fetches — the moment the epoch moves (same tab)
+     * or the store is seen emptied (another context). */
+    let unsaved = 0;
+    let writing = Promise.resolve();
+    const born = S.cache.epoch();
+    let forgotten = false;
+    const gone = () => forgotten || (forgotten = S.cache.epoch() !== born);
+    const write = () => {
+      const n = unsaved;
+      unsaved = 0;
+      const back = () => { if (!gone()) unsaved += n; };
+      /* CALLED, NOT SCHEDULED: the storage call leaves inside this very
+       * tick, which is what lets a leaving handler issue it before the page
+       * freezes. */
+      let p;
       try {
-        const res = await fetch("/" + name, { credentials: "same-origin" });
-        if (res.status === 429 || res.status === 403) {
-          halted = res.status;
-          return;
-        }
-        if (res.ok) {
-          read++;
-          const doc = new DOMParser().parseFromString(await res.text(), "text/html");
-          /* ONE PARSE, TEN FACTS (facts.js). Topics are still scoped to the
-           * sidebar in there, so a README full of /topics/ links cannot lie;
-           * everything else this page was already telling us is now kept
-           * instead of dropped, for exactly the same one request. */
-          const facts = S.factsFrom(doc, name);
-          facts.at = Date.now();
-          /* The canary counts the ANCHORS this parse could find, then the
-           * evidence is dropped: `saw` is a fact about the parse, not about
-           * the repository, and caching it would mean a page read in March
-           * still voting on whether the markup is intact in August. */
-          seen.pages++;
-          Object.keys(seen).forEach((k) => {
-            if (k !== "pages" && facts.saw && facts.saw[k]) seen[k]++;
-          });
-          delete facts.saw;
-          found.set(name, facts);
-          cache[name] = facts;
-        }
+        p = Promise.resolve(S.cache.write(cache, settings));
       } catch (e) {
-        /* one unreachable repo must not sink the page (P.III) */
+        p = Promise.reject(e);
       }
-      done++;
-      if (onProgress) onProgress(done, todo.length);
-    });
+      return p.then((ok) => { if (ok === false) back(); }, back);
+    };
+    const flush = () => {
+      if (!unsaved || gone()) return writing;
+      writing = writing.then(() => (unsaved && !gone() ? write() : undefined));
+      return writing;
+    };
+    const leaving = (e) => {
+      if (e && e.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+      if (!unsaved || gone()) return;
+      writing = write();
+    };
+    const emptied = (changes, area) => {
+      const c = area === "local" && changes && changes.repoFacts;
+      if (c && !(c.newValue && Object.keys(c.newValue).length)) forgotten = true;
+    };
+    const LEAVE = ["visibilitychange", "freeze"];   // on document; pagehide is on window
+    const on = typeof document !== "undefined" && document.addEventListener;
+    const watch = (add) => {
+      const m = add ? "addEventListener" : "removeEventListener";
+      if (on) LEAVE.forEach((t) => document[m](t, leaving));
+      if (on && typeof window !== "undefined") window[m]("pagehide", leaving);
+      try {
+        const ev = chrome.storage.onChanged;
+        add ? ev.addListener(emptied) : ev.removeListener(emptied);
+      } catch (e) {
+        /* no chrome.storage — the same-tab epoch still guards rescan */
+      }
+    };
+    watch(true);
 
-    // Pay once, remember it (P.VIII).
-    if (read) await S.cache.write(cache, settings);
+    try {
+      await pool(todo, settings.concurrency, async (name) => {
+        /* STOP WHEN GITHUB SAYS STOP. Measured against a server answering 429 to
+         * everything: this loop issued all forty requests anyway, and showed the
+         * reader a page of Ungrouped repos with no explanation at all. It is the
+         * highest-volume path in the extension — hundreds of authenticated
+         * same-origin fetches — and it was the only one with no backoff, while
+         * warm.js, which makes six, had one. That asymmetry is how a convenience
+         * gets somebody rate-limited on their own account. */
+        if (halted || gone()) return;
+        try {
+          const res = await fetch("/" + name, { credentials: "same-origin" });
+          if (res.status === 429 || res.status === 403) {
+            halted = res.status;
+            return;
+          }
+          if (res.ok) {
+            read++;
+            const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+            /* ONE PARSE, TEN FACTS (facts.js). Topics are still scoped to the
+             * sidebar in there, so a README full of /topics/ links cannot lie;
+             * everything else this page was already telling us is now kept
+             * instead of dropped, for exactly the same one request. */
+            const facts = S.factsFrom(doc, name);
+            facts.at = Date.now();
+            /* The canary counts the ANCHORS this parse could find, then the
+             * evidence is dropped: `saw` is a fact about the parse, not about
+             * the repository, and caching it would mean a page read in March
+             * still voting on whether the markup is intact in August. */
+            seen.pages++;
+            Object.keys(seen).forEach((k) => {
+              if (k !== "pages" && facts.saw && facts.saw[k]) seen[k]++;
+            });
+            delete facts.saw;
+            found.set(name, facts);
+            cache[name] = facts;
+            if (++unsaved >= FLUSH_EVERY) flush();
+          }
+        } catch (e) {
+          /* one unreachable repo must not sink the page (P.III) */
+        }
+        done++;
+        if (onProgress) onProgress(done, todo.length);
+      });
+
+    } finally {
+      /* Even if the pool threw: a `leaving` left attached would write this
+       * pass's stale snapshot on every tab switch for the life of the page. */
+      watch(false);
+    }
+
+    // Pay once, remember it (P.VIII) — whatever the last flush did not cover.
+    await flush();
     return {
       found, fetched: todo.length, seen, halted,
       unread: todo.length - read,

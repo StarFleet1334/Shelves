@@ -217,7 +217,7 @@ globalThis.Shelves = globalThis.Shelves || {};
           if (total) {
             status.textContent =
               "reading repo pages " + done + "/" + total +
-              " — cached after this";
+              " — cached as it goes";
           }
         }
       );

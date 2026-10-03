@@ -228,6 +228,106 @@ const TURBO_REPOS = [
 ];
 const TURBO_LIVE = { q: "wire", hits: ["wire-a", "wire-b"], all: 4, note: "plain" };
 
+/* ── A PASS THAT CAN BE CAUGHT HALFWAY ─────────────────────────────────────
+   The "mid-pass" scenarios are about what a cold rung-4 pass has PUT DOWN
+   before it ends, which world.js cannot show on its own: its fetches all land
+   in a few milliseconds and its storage writes are instant, so "after the
+   last one" and "as it goes" leave the same store behind.
+
+   PRIVATE AND INVISIBLE TO THE API, so every row climbs to rung 4 — one
+   same-origin page read each. Half carry a topic so the shelf is not empty. */
+function midPassRepos(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    name: "m" + String(i).padStart(2, "0"),
+    topics: i % 2 ? ["keep"] : [],
+    private: true,
+  }));
+}
+
+/* THREE INSTRUMENTS ON ONE WORLD, fitted before the pass starts (main.js waits
+   on storage before it reads anything, so right after build() is early enough).
+
+   THE GATE: repo-page fetches answer normally until `blockAfter` have been
+   answered, then return a promise that never settles — a tab that was closed
+   or discarded mid-pass, as far as the pass can ever tell. `release` is not
+   offered on purpose: a dying tab gets no second chance either.
+
+   THE LEDGER OF WRITES: every chrome.storage.local.set that carries
+   `repoFacts`, as the sorted KEYS it held at the moment of the call (the stub
+   stores by reference, so reading the store later could see a record that was
+   not there yet). `delay(i)` holds the i-th write before it reaches the store
+   — out of order if the delays shrink — and `maxInFlight` says whether two
+   were ever outstanding at once.
+
+   THE LEDGER OF LISTENERS: adds and removes of the three leaving events, on
+   document and window, so "the pass cleaned up after itself" is a count and
+   not an inference from silence. */
+const LEAVING = ["visibilitychange", "freeze", "pagehide"];
+function midPass(w, opts) {
+  const o = opts || {};
+  const t = { answered: 0, held: 0, writes: [], inFlight: 0, maxInFlight: 0,
+              added: 0, removed: 0, live: [] };
+
+  const fetchReal = w.win.fetch;
+  w.win.fetch = (url) => {
+    if (o.blockAfter != null && t.answered >= o.blockAfter) {
+      t.held++;
+      return new Promise(() => {});
+    }
+    t.answered++;
+    return fetchReal(url);
+  };
+
+  const local = w.win.chrome.storage.local;
+  const setReal = local.set;
+  local.set = (obj, cb) => {
+    if (!obj || !("repoFacts" in obj)) return setReal(obj, cb);
+    const i = t.writes.length;
+    t.writes.push(Object.keys(obj.repoFacts || {}).sort());
+    t.inFlight++;
+    t.maxInFlight = Math.max(t.maxInFlight, t.inFlight);
+    const land = () => setReal(obj, () => { t.inFlight--; if (cb) cb(); });
+    const ms = o.delay ? o.delay(i) : 0;
+    if (ms) setTimeout(land, ms); else land();
+  };
+
+  const watch = (target) => {
+    const add = target.addEventListener;
+    const rm = target.removeEventListener;
+    target.addEventListener = function (type, fn, x) {
+      if (LEAVING.includes(type)) { t.added++; t.live.push([target, type, fn]); }
+      return add.call(this, type, fn, x);
+    };
+    target.removeEventListener = function (type, fn, x) {
+      if (LEAVING.includes(type)) {
+        const k = t.live.findIndex((l) => l[0] === target && l[1] === type && l[2] === fn);
+        if (k !== -1) { t.removed++; t.live.splice(k, 1); }
+      }
+      return rm.call(this, type, fn, x);
+    };
+  };
+  watch(w.win.document);
+  watch(w.win);
+  return t;
+}
+
+/* THE PAGE GOING AWAY. jsdom's visibilityState is a getter on the prototype
+   and answers "visible" forever under pretendToBeVisual; an own property on
+   the document instance shadows it, which is all topics.js ever reads. */
+function leave(w, type, state) {
+  const doc = w.win.document;
+  if (type === "visibilitychange") {
+    Object.defineProperty(doc, "visibilityState", { value: state || "hidden", configurable: true });
+    doc.dispatchEvent(new w.win.Event("visibilitychange"));
+  } else if (type === "pagehide") {
+    w.win.dispatchEvent(new w.win.Event("pagehide"));
+  } else {
+    doc.dispatchEvent(new w.win.Event(type));
+  }
+}
+
+const storedFacts = (w) => Object.keys(w.store.local.repoFacts || {});
+
 /* ---------------------------------------------------------------------- */
 
 const SCENARIOS = [
@@ -372,6 +472,346 @@ const SCENARIOS = [
       "with every repo read, all 4 tagged ones are found, got " +
       again.topics.filter((t) => t.length).length);
     ctx.info = "5 of 12 read, 7 offered, 7 read on continue — none re-read";
+  }),
+
+  check("mid-pass — records are written while the pass is still running",
+    async (ctx) => {
+    /* PAY ONCE HELD ONLY FOR A PASS THAT FINISHED. The cache was written once,
+       after the last fetch landed — so a cold pass of a hundred that was closed
+       or discarded twenty in had read twenty pages and kept none of them, and
+       the next visit paid for all twenty again.
+
+       Twenty-five rung-4 rows, three at a time; the twelve-and-first fetch
+       never answers. The pass is hung, as a dying tab's is, and what matters
+       is what the store already holds. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w, { blockAfter: 12 });
+    await settle(900);
+
+    assert(ctx, w.counters.scraped.length === 12 && t.held > 0,
+      "the gate must hold the pass after 12 reads, read " +
+      w.counters.scraped.length + ", held " + t.held);
+    const read = new Set(w.counters.scraped);
+    const kept = storedFacts(w);
+    assert(ctx, kept.length >= 10,
+      "at least 10 of the 12 records read must already be in storage while the " +
+      "pass is hung, stored " + kept.length);
+    assert(ctx, kept.every((k) => read.has(k)),
+      "and only records that were actually read: " +
+      kept.filter((k) => !read.has(k)).join());
+    /* ONE WRITE, NOT TWELVE. Ten reads earn a write. It may carry more than
+       ten — the write is queued behind the chain and snapshots the cache when
+       it runs, by which time the reads already in flight have landed — but it
+       is one write, and nothing past twelve was ever read to put in it. */
+    assert(ctx, t.writes.length === 1 && t.writes[0].length >= 10,
+      "exactly one write of at least 10 so far, got " +
+      (t.writes.map((k) => k.length).join("+") || "none"));
+    ctx.info = "12 read, " + kept.length + " already stored, pass still hung";
+  }),
+
+  check("mid-pass — a hidden tab flushes what it has", async (ctx) => {
+    /* BELOW THE FLUSH LINE, THE ONLY WRITE IS THE ONE LEAVING EARNS. Four reads
+       will never reach ten on a tab that is going away; the last event it
+       reliably gets is the cue to put them down. Each of the three exits is
+       tried in a world of its own, because one flush would hide the next. */
+    const exits = ["visibilitychange", "pagehide", "freeze"];
+    const told = [];
+    for (const exit of exits) {
+      const w = build({
+        viewer: "octo", owner: "octo",
+        settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+        apiRepos: [],
+        repos: midPassRepos(25),
+      });
+      const t = midPass(w, { blockAfter: 4 });
+      await settle(700);
+      assert(ctx, w.counters.scraped.length === 4,
+        exit + ": the gate must hold the pass after 4 reads, read " +
+        w.counters.scraped.length);
+      assert(ctx, t.writes.length === 0,
+        exit + ": 4 reads are below FLUSH_EVERY and must not write on their own, " +
+        "wrote " + t.writes.length);
+
+      leave(w, exit);
+      await settle(100);
+      const read = w.counters.scraped.slice().sort();
+      const kept = storedFacts(w).sort();
+      assert(ctx, t.writes.length === 1,
+        exit + ": leaving must write once, wrote " + t.writes.length);
+      assert(ctx, kept.join() === read.join(),
+        exit + ": the store must hold exactly the 4 read, holds [" + kept.join() +
+        "] for [" + read.join() + "]");
+
+      /* LEAVING TWICE IS FREE. A tab that goes hidden, comes back and goes
+         hidden again with nothing new read has nothing to write. */
+      const once = t.writes.length;
+      leave(w, exit);
+      await settle(100);
+      assert(ctx, t.writes.length === once,
+        exit + ": a second exit with nothing new must not write, wrote " +
+        (t.writes.length - once) + " more");
+      told.push(exit + " " + kept.length + "/4");
+    }
+    ctx.info = "kept on leaving: " + told.join(", ");
+  }),
+
+  check("mid-pass — a visible visibilitychange does not write", async (ctx) => {
+    /* COMING BACK IS NOT LEAVING. visibilitychange fires both ways; a tab the
+       reader just returned to is in no danger, and writing on it would turn
+       every tab switch into a storage write. The hidden one afterwards is the
+       control: it proves the listener was there to decline. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w, { blockAfter: 4 });
+    await settle(700);
+    leave(w, "visibilitychange", "visible");
+    await settle(100);
+    assert(ctx, t.writes.length === 0,
+      "a visible visibilitychange must not write, wrote " + t.writes.length);
+    leave(w, "visibilitychange", "hidden");
+    await settle(100);
+    assert(ctx, t.writes.length === 1 && t.writes[0].length === 4,
+      "the control: hidden afterwards must write the 4 held, got " +
+      (t.writes.map((k) => k.length).join("+") || "no write"));
+    ctx.info = "visible: 0 writes; hidden: " + t.writes.length + " write of " +
+      ((t.writes[0] || []).length);
+  }),
+
+  check("mid-pass — the flushes are never concurrent and the last one wins",
+    async (ctx) => {
+    /* EACH WRITE IS THE WHOLE OBJECT, so two in flight are a race the older
+       snapshot can win. The stub is made to land them backwards: the first
+       write takes 300ms, the second 150, the third 20 — if they overlapped,
+       the 10-record snapshot would land last and the store would forget 15. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w, { delay: (i) => [300, 150, 20][i] || 20 });
+    await settle(1800);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+
+    assert(ctx, w.counters.scraped.length === 25,
+      "a cold pass reads all 25, read " + w.counters.scraped.length);
+    const kept = storedFacts(w);
+    assert(ctx, kept.length === 25,
+      "the store must end with all 25 records, holds " + kept.length);
+    assert(ctx, t.maxInFlight === 1,
+      "no two cache writes may be in flight at once, saw " + t.maxInFlight);
+    /* AT MOST ONE WRITE PER TEN READS PLUS THE REMAINDER — ceil(25/10). A write
+       snapshots the cache when the chain reaches it, not when it was asked
+       for, so a slow first write lets the second carry everything and the
+       third can be a rewrite of the same 25; that is the one redundancy
+       allowed. Never fewer than two (the pass did write as it went), never
+       shrinking (a snapshot older than the one before it is the race), and
+       the last one is what the store holds. */
+    const sizes = t.writes.map((k) => k.length);
+    assert(ctx, sizes.length >= 2 && sizes.length <= Math.ceil(25 / 10),
+      "between 2 and 3 writes for 25 reads, got " + (sizes.join() || "none"));
+    assert(ctx, sizes.every((n, i) => i === 0 || n >= sizes[i - 1]),
+      "no write may carry fewer records than the one before it: " + sizes.join());
+    assert(ctx, sizes[sizes.length - 1] === 25,
+      "the last write must carry all 25, got " + sizes[sizes.length - 1]);
+    ctx.info = "writes " + sizes.join(" → ") + ", max in flight " + t.maxInFlight;
+  }),
+
+  check("mid-pass — listeners do not outlive the pass", async (ctx) => {
+    /* A LISTENER LEFT BEHIND IS A CLOSURE OVER A FINISHED PASS. It would keep
+       the pass's whole cache object alive for the life of the page, and a
+       second pass (`read N more`, a Turbo return) would stack another beside
+       it. The ledger counts them; the leaving events after the end are the
+       behaviour that must follow. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w);
+    await settle(900);
+    assert(ctx, readShelves(w.win), "never rendered");
+    assert(ctx, t.added === 3,
+      "a cold pass should listen for the 3 leaving events, added " + t.added);
+    assert(ctx, t.live.length === 0,
+      "and remove every one when it ends, still live: " +
+      t.live.map((l) => l[1]).join());
+    const before = t.writes.length;
+    leave(w, "visibilitychange", "hidden");
+    leave(w, "pagehide");
+    leave(w, "freeze");
+    await settle(100);
+    assert(ctx, t.writes.length === before,
+      "leaving after the pass must not write, wrote " + (t.writes.length - before));
+    ctx.info = t.added + " added, " + t.removed + " removed, " +
+      (t.writes.length - before) + " writes after the end";
+  }),
+
+  check("mid-pass — a warm run writes nothing", async (ctx) => {
+    /* NOTHING NEW, NOTHING WRITTEN. The flush counts unsaved reads, so a pass
+       whose every row was answered by the cache must not rewrite it — the old
+       single write at the end already held to that, and the new ones must not
+       break it. */
+    const now = Date.now();
+    const cache = {};
+    midPassRepos(25).forEach((r) => {
+      cache["octo/" + r.name] = { at: now, topics: r.topics };
+    });
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+      cache,
+    });
+    const t = midPass(w);
+    await settle(900);
+    const v = readShelves(w.win);
+    assert(ctx, v, "never rendered");
+    assert(ctx, w.counters.scraped.length === 0,
+      "a warm cache must read no pages, read " + w.counters.scraped.length);
+    assert(ctx, t.writes.length === 0,
+      "and write no cache, wrote " + t.writes.length);
+    const shelf = v && byLabel(v)["keep"];
+    assert(ctx, shelf && shelf.count === 12,
+      "the cache alone shelves the 12 tagged, got " + (shelf ? shelf.count : "no shelf"));
+    ctx.info = "0 read, 0 written, " + (shelf ? shelf.count : 0) + " shelved from cache";
+  }),
+
+  check("mid-pass — a rescan during the pass is not written back", async (ctx) => {
+    /* WRITING AS IT GOES MADE RESCAN UNDOABLE. The pass holds the whole cache
+       in memory, so the reader pressing `rescan` mid-pass emptied the store
+       and the pass's next flush — or the pagehide of the reload itself — wrote
+       every record straight back. The reload found a warm cache and rescan
+       had done nothing at all. Two clears, two worlds: this tab's own rescan
+       (the epoch), and the options page's Clear in another context (the store
+       seen emptied). */
+    const told = [];
+    for (const how of ["rescan", "options"]) {
+      const w = build({
+        viewer: "octo", owner: "octo",
+        settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+        apiRepos: [],
+        repos: midPassRepos(25),
+      });
+      const t = midPass(w, { blockAfter: 14 });
+      await settle(900);
+      assert(ctx, t.writes.length >= 1,
+        how + ": the pass has flushed once before the clear, wrote " + t.writes.length);
+      const before = t.writes.length;
+
+      if (how === "rescan") {
+        await w.win.Shelves.cache.clear();
+      } else {
+        /* ANOTHER CONTEXT. The options page does not share this tab's epoch;
+           all the pass can see is the store change arriving. */
+        await new Promise((r) => w.win.chrome.storage.local.set(
+          { repoFacts: {}, topicCache: {} }, r));
+      }
+      await settle(50);
+      const cleared = t.writes.length;
+      leave(w, "pagehide");
+      leave(w, "visibilitychange");
+      await settle(100);
+      assert(ctx, t.writes.length === cleared,
+        how + ": nothing may be written after the clear, wrote " +
+        (t.writes.length - cleared) + " more");
+      assert(ctx, storedFacts(w).length === 0,
+        how + ": the store stays empty, holds " + storedFacts(w).join(", "));
+      told.push(how + " " + before + "→0");
+    }
+    ctx.info = "cleared and kept clear: " + told.join(", ");
+  }),
+
+  check("mid-pass — a write that fails is tried again", async (ctx) => {
+    /* `set` NEVER THROWS, IT ANSWERS false. The count of unsaved reads was
+       zeroed before the write ran, so a write that failed — quota, a torn-down
+       port — was believed, and with no further reads nothing ever retried it.
+       Four reads, the first leave's write refused, the second leave's must
+       carry them. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w, { blockAfter: 4 });
+    await settle(700);
+    const local = w.win.chrome.storage.local;
+    const inner = local.set;
+    let refuse = 1;
+    local.set = (obj, cb) => {
+      if (refuse && obj && "repoFacts" in obj) {
+        refuse--;
+        t.writes.push(["(refused)"]);
+        setTimeout(() => {
+          w.win.chrome.runtime.lastError = { message: "QUOTA_BYTES quota exceeded" };
+          try { if (cb) cb(); } finally { w.win.chrome.runtime.lastError = null; }
+        }, 0);
+        return;
+      }
+      return inner(obj, cb);
+    };
+
+    leave(w, "visibilitychange");
+    await settle(100);
+    assert(ctx, storedFacts(w).length === 0 && t.writes.length === 1,
+      "the first write was refused, so nothing is stored yet, holds " + storedFacts(w).length);
+    leave(w, "visibilitychange");
+    await settle(100);
+    assert(ctx, t.writes.length === 2,
+      "the next leave must try again, wrote " + (t.writes.length - 1) + " more");
+    assert(ctx, storedFacts(w).length === 4,
+      "and the 4 reads land on the retry, stored " + storedFacts(w).length);
+    ctx.info = "refused once, retried on the next leave, 4 stored";
+  }),
+
+  check("mid-pass — the last-chance write does not queue behind a slow one", async (ctx) => {
+    /* A FROZEN PAGE RUNS NO MORE TASKS. If the leave write is chained behind a
+       periodic write whose storage callback has not come back, it waits on a
+       callback that will never run, and the records it exists to save die in
+       the queue. The first write here never lands; leaving must still issue
+       its own, at once, carrying everything read. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"], concurrency: 3, scrapeMax: 0 },
+      apiRepos: [],
+      repos: midPassRepos(25),
+    });
+    const t = midPass(w, { blockAfter: 14 });
+    /* STUCK, NOT SLOW: the first write's callback never comes — a long timer
+       would keep node alive for as long as it was set for. */
+    const local = w.win.chrome.storage.local;
+    const counted = local.set;
+    let first = true;
+    local.set = (obj, cb) => {
+      if (first && obj && "repoFacts" in obj) {
+        first = false;
+        return counted(obj, () => {});   // lands, but its callback is lost
+      }
+      return counted(obj, cb);
+    };
+    await settle(900);
+    assert(ctx, t.writes.length === 1,
+      "the periodic write is issued and its callback lost, writes " + t.writes.length);
+    leave(w, "freeze");
+    assert(ctx, t.writes.length === 2,
+      "leaving must issue its write from the handler, not behind the stuck one, " +
+      "writes " + t.writes.length);
+    assert(ctx, (t.writes[1] || []).length === 14,
+      "and it carries all 14 read, carried " + (t.writes[1] || []).length);
+    ctx.info = "first write stuck; freeze wrote " + (t.writes[1] || []).length + " at once";
   }),
 
   check("token-fallback — a dead token falls back to the public API, not to 76 page reads",

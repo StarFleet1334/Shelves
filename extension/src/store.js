@@ -122,6 +122,7 @@ globalThis.Shelves = globalThis.Shelves || {};
    * already handles. So it is adopted rather than discarded, and nobody pays
    * seventy-six requests for an upgrade. */
 
+  let epoch = 0;
   S.cache = {
     async read() {
       const got = await get("local", { [FACTS_KEY]: {}, [CACHE_KEY]: {} });
@@ -193,7 +194,16 @@ globalThis.Shelves = globalThis.Shelves || {};
      * allowed to touch them (P.I's "reconstructible" is a claim about this
      * store, and notes are the one part of it that is not). */
     clear() {
+      epoch++;
       return set("local", { [FACTS_KEY]: {}, [CACHE_KEY]: {} });
+    },
+    /* WHICH CLEAR THIS IS. A cold pass holds the whole cache in memory and
+     * flushes it as it goes, so a `rescan` pressed mid-pass would be undone by
+     * the pass's next write — every record the reader just asked to forget,
+     * written straight back before the reload landed. A pass notes the epoch
+     * it was born in and stops writing the moment it moves. */
+    epoch() {
+      return epoch;
     },
   };
 
