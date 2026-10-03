@@ -80,16 +80,45 @@ function row(owner, name, topics, description) {
    without it in the fixture `isMine()` answers "cannot tell -> treat as yours",
    which is the correct degradation and also means the whole ownership guard
    goes untested. A world that never signs anybody in cannot see it. */
-function viewerMeta(viewer) {
+function viewerMeta(viewer, session) {
+  if (session === "out") return `<meta name="user-login" content="">`;
   return viewer ? `<meta name="user-login" content="${viewer}">` : "";
 }
 
+/* SIGNED OUT IS A FOURTH WORLD, NOT THE ABSENCE OF A VIEWER. With no meta at
+   all the fixture means "cannot tell" — markup moved — and the guard rightly
+   degrades to "mine". A signed-out reader is the opposite case wearing the
+   same empty viewer: GitHub says so out loud, with `<body class="logged-out">`,
+   a `user-login` meta that is PRESENT and empty, and a Sign in link in the
+   header. Treating that silence as "mine" sent the reader's configured token
+   and their cookie-less rung 4 at every stranger on GitHub, so the fixture has
+   to be able to say it. `session` is:
+     "out"  signed out, every marker the real page carries
+     "in"   signed in, but the user-login meta has moved — body says logged-in
+     other  the body exactly as before, byte for byte, so the scenarios that
+            lean on "unknown counts as mine" are still standing on unknown */
+function bodyOpen(session) {
+  if (session === "out") {
+    return `<body class="logged-out env-production page-responsive">` +
+      `<header class="Header-old header-logged-out">` +
+      `<a href="/login?return_to=%2F" class="HeaderMenu-link">Sign in</a>` +
+      `<a href="/signup">Sign up</a></header>`;
+  }
+  if (session === "in") return `<body class="logged-in env-production page-responsive">`;
+  return `<body>`;
+}
+
+/* WHICH SESSION A build() OPTS INTO. Both flags off is today's world. */
+function sessionOf(o) {
+  return o && o.signedOut ? "out" : o && o.signedInNoMeta ? "in" : "";
+}
+
 /** The profile Repositories tab. `next` renders a pagination link. */
-function profilePage(owner, repos, next, viewer) {
+function profilePage(owner, repos, next, viewer, session) {
   const items = repos
     .map((r) => row(owner, r.name, r.chips, r.description))
     .join("");
-  return `<!doctype html><html><head>${viewerMeta(viewer)}</head><body>
+  return `<!doctype html><html><head>${viewerMeta(viewer, session)}</head>${bodyOpen(session)}
     <div id="user-repositories-list">
       <ul class="repo-list" data-filterable-for="your-repos-filter">${items}</ul>
       <div class="paginate-container">${
@@ -125,8 +154,8 @@ function repoPage(repo, owner, name) {
   const sideClass = r.sidebarClass || (r.broken ? "AboutPanel" : "Layout-sidebar");
   return `<!doctype html><html><head>
     ${metaDesc && !r.broken ? `<meta name="description" content="${metaDesc}">` : ""}
-    ${viewerMeta(r.viewer)}
-  </head><body>
+    ${viewerMeta(r.viewer, sessionOf(r))}
+  </head>${bodyOpen(sessionOf(r))}
     <div class="${sideClass}">
       ${r.noAbout ? "" : "<h2>About</h2>"}
       ${topics.map(chip).join("")}
@@ -208,6 +237,7 @@ function bootWorker(fetchImpl, counters) {
     fetch: async (url, opts) => {
       counters.api++;
       counters.lastAuth = !!(opts && opts.headers && opts.headers.Authorization);
+      counters.calls.push({ url: String(url), auth: counters.lastAuth });
       return fetchImpl(String(url), opts);
     },
     console,
@@ -252,6 +282,14 @@ function bootWorker(fetchImpl, counters) {
  *   settings    seed for chrome.storage.sync
  *   token       seed for chrome.storage.local
  *   cache       seed topic cache
+ *   signedOut   the reader is SIGNED OUT: empty user-login meta, body
+ *               `logged-out`, a header Sign in link. Leave `viewer` unset
+ *   signedInNoMeta  signed in (body `logged-in`) but the user-login meta has
+ *               moved — the "markup changed under us" shape of a real session
+ *
+ * `counters.calls` lists every worker API request as {url, auth}, because
+ * `lastAuth` only remembers the last one and "no request carried the token"
+ * is a claim about all of them.
  */
 function build(opts) {
   const owner = opts.owner || "octo";
@@ -264,7 +302,8 @@ function build(opts) {
              overrides: opts.overrides || {},
              pins: opts.pins || {} },
   };
-  const counters = { api: 0, lastAuth: false, pages: [], scraped: [] };
+  const counters = { api: 0, lastAuth: false, pages: [], scraped: [], calls: [] };
+  const session = sessionOf(opts);
 
   /* TWO ROUTES, ONE WORLD. `at` stands the browser somewhere other than the
      profile tab — a repo's own page, or anywhere else on github.com — which is
@@ -276,11 +315,12 @@ function build(opts) {
     ? `https://github.com/${at}`
     : `https://github.com/${owner}?tab=repositories`;
   const html = at
-    ? repoPage({ ...(opts.page || {}), viewer: opts.viewer },
+    ? repoPage({ ...(opts.page || {}), viewer: opts.viewer,
+                 signedOut: opts.signedOut, signedInNoMeta: opts.signedInNoMeta },
                at.split("/")[0], at.split("/")[1])
     : profilePage(owner, opts.repos,
                   opts.page2 ? "/" + owner + "?tab=repositories&page=2" : "",
-                  opts.viewer);
+                  opts.viewer, session);
 
   /* RELOADS ARE COUNTED, because the QUIET list in main.js is the only thing
    * standing between "the reader pinned a repo" and "the page reloaded and
@@ -350,7 +390,7 @@ function build(opts) {
     if (/[?&]page=2/.test(u)) {
       counters.pages.push(u);
       return { ok: true, status: 200,
-               text: async () => profilePage(owner, opts.page2, "", opts.viewer) };
+               text: async () => profilePage(owner, opts.page2, "", opts.viewer, session) };
     }
     const name = u.replace(/^https?:\/\/github\.com/, "").replace(/^\//, "").toLowerCase();
     const all = (opts.repos || []).concat(opts.page2 || []);

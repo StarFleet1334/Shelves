@@ -3064,6 +3064,239 @@ const SCENARIOS = [
     ctx.info = "stranger: 0 token, 0 scrapes, 0 cache writes, still shelved";
   }),
 
+  /* ---- SIGNED OUT ------------------------------------------------------
+     `isMine()` read "no viewer" as "cannot tell, behave as before" — which is
+     right when GitHub moves the meta, and exactly wrong when GitHub is saying
+     out loud that nobody is signed in. Signed out on github.com/torvalds the
+     guard answered "yes, yours": the reader's configured token went to
+     `/user/repos` (answering with the READER's repos, on Linus's page), rung 4
+     fetched the stranger's repo pages, and every one of them entered
+     `repoFacts`, which the background top-up then refreshes forever. These
+     four pin the tri-state: signed out is NOT unknown, and unknown is still
+     unknown. */
+
+  check("signed out — a stranger's profile gets the free rungs only", async (ctx) => {
+    const theirs = Array.from({ length: 6 }, (_, i) => ({
+      name: "kernel-" + i, topics: ["aiproject"],        // no chips: rung 4 bait
+    }));
+    const w = build({
+      signedOut: true,                     // body.logged-out, empty user-login
+      owner: "torvalds",
+      token: "github_pat_THE_READERS_OWN", // configured, and NOT to be spent here
+      settings: { groups: ["aiproject"] },
+      repos: theirs,
+      apiRepos: [],                        // API answers nothing -> rung 4 would fire
+    });
+    await settle(1500);
+    const S = w.win.Shelves;
+
+    /* THE GUARD ITSELF, read directly. Signed out has no viewer, and that is
+       the whole point — the empty viewer is what used to be read as "mine". */
+    assert(ctx, S.viewer() === "", "signed out has no viewer, got: " + JSON.stringify(S.viewer()));
+    assert(ctx, typeof S.signedIn === "function",
+      "S.signedIn is missing — there is no way to tell signed out from unknown");
+    if (typeof S.signedIn === "function") {
+      assert(ctx, S.signedIn() === false,
+        "a logged-out body with an empty user-login meta is POSITIVE evidence, got: " +
+        JSON.stringify(S.signedIn()));
+    }
+    assert(ctx, S.isMine() === false,
+      "signed out, no profile on GitHub is the reader's, got isMine() === " + S.isMine());
+
+    /* THE CREDENTIALS. Every call, not the last one. */
+    const authed = w.counters.calls.filter((c) => c.auth);
+    assert(ctx, w.counters.calls.length > 0, "the public API must still be asked (free rung)");
+    assert(ctx, authed.length === 0,
+      "the reader's token must not be sent while signed out, carried on: " +
+      authed.map((c) => c.url).join(", "));
+    assert(ctx, !w.counters.calls.some((c) => /\/user\/repos/.test(c.url)),
+      "and `/user/repos` — the reader's OWN list — must not be asked on torvalds' page, got: " +
+      w.counters.calls.map((c) => c.url).join(", "));
+    assert(ctx, w.counters.scraped.length === 0,
+      "rung 4 must not fetch a stranger's repo pages, fetched " + w.counters.scraped.length +
+      ": " + w.counters.scraped.join(", "));
+    const facts = Object.keys(w.store.local.repoFacts || {});
+    assert(ctx, facts.length === 0,
+      "and nothing of theirs may enter repoFacts for the top-up to refresh, got " +
+      facts.length + ": " + facts.join(", "));
+
+    /* A NARROWING, NOT A REFUSAL — exactly as for a signed-in stranger. */
+    const v = readShelves(w.win);
+    assert(ctx, v, "a signed-out reader's page must still be shelved");
+    if (v) {
+      const rows = v.shelves.reduce((n, s) => n + s.count, 0);
+      assert(ctx, rows === theirs.length,
+        "every row is still on a shelf, counted " + rows + " of " + theirs.length);
+      assert(ctx, /not yours|signed out/.test(v.note),
+        "the source line says which rungs were allowed to answer, got: " + v.note);
+    }
+    const doc = w.win.document;
+    assert(ctx, doc.querySelectorAll("#shelves-host .sh-grip").length === 0,
+      "no grip — it would pin a stranger's repo in the reader's store, got " +
+      doc.querySelectorAll("#shelves-host .sh-grip").length);
+    const rec = (w.store.local.shelfMap || {}).torvalds;
+    assert(ctx, rec && rec.status && rec.status.mine === false,
+      "the shelf map labels it not the reader's, got: " +
+      JSON.stringify(rec && rec.status && rec.status.mine));
+
+    /* THE FIRST-DAY VERBS, on the shape that offers them (no groups yet). */
+    const fresh = build({
+      signedOut: true, owner: "torvalds", settings: { groups: [] },
+      apiRepos: [
+        { name: "wiremock-api", topics: [] }, { name: "wiremock-data", topics: [] },
+        { name: "wiremock-demo", topics: [] }, { name: "loose", topics: [] },
+      ],
+      repos: [
+        { name: "wiremock-api", topics: [] }, { name: "wiremock-data", topics: [] },
+        { name: "wiremock-demo", topics: [] }, { name: "loose", topics: [] },
+      ],
+    });
+    await settle(1400);
+    const fd = fresh.win.document;
+    assert(ctx, readShelves(fresh.win), "the fresh signed-out page is still shelved");
+    assert(ctx, fd.querySelectorAll("#shelves-host .sh-sug").length === 0,
+      "no suggestion may write settings.groups from a signed-out stranger's page, got " +
+      fd.querySelectorAll("#shelves-host .sh-sug").length);
+    assert(ctx, fd.querySelectorAll("#shelves-host .sh-bench").length === 0,
+      "nor a walk through their untagged repos, got " +
+      fd.querySelectorAll("#shelves-host .sh-bench").length);
+    assert(ctx, fd.querySelectorAll("#shelves-host .sh-grip").length === 0,
+      "nor a grip, got " + fd.querySelectorAll("#shelves-host .sh-grip").length);
+    ctx.info = "signed out: " + w.counters.calls.length + " call(s), 0 authed, " +
+      w.counters.scraped.length + " scrapes, " + facts.length + " cache writes, still shelved";
+  }),
+
+  check("signed out — the repo page draws no chip", async (ctx) => {
+    /* THE CONTROL FIRST: the same page with no session markers at all is
+       "unknown", counts as mine, and draws — so a missing chip below means the
+       guard, not a fixture that could never have drawn one. */
+    const blind = build({
+      at: "torvalds/linux", settings: { groups: ["aiproject"] },
+      page: { topics: ["aiproject"] },
+    });
+    await settle();
+    assert(ctx, readMark(blind.win) !== null,
+      "control: an unknown session still draws the chip — otherwise this proves nothing");
+
+    const out = build({
+      signedOut: true, at: "torvalds/linux", settings: { groups: ["aiproject"] },
+      page: { topics: ["aiproject"] },
+    });
+    await settle();
+    const m = readMark(out.win);
+    assert(ctx, m === null,
+      "no shelf chip on torvalds/linux for a signed-out reader, drew: " +
+      JSON.stringify(m && m.label));
+    ctx.info = "unknown: chip drawn · signed out: " + (m ? "chip drawn" : "no chip");
+  }),
+
+  check("signed out — unknown still counts as mine", async (ctx) => {
+    /* THE OVER-CORRECTION GUARD. No user-login meta and NO signed-out markers
+       is "GitHub moved the meta", and answering "not yours" there would turn
+       the extension off for everybody at once. The fix must leave this world
+       exactly as it was: token sent, rung 4 run, cache written. */
+    const repos = [{ name: "r1", topics: ["aiproject"] }, { name: "r2", topics: ["aiproject"] }];
+    const w = build({
+      owner: "whoever", token: "github_pat_X",
+      settings: { groups: ["aiproject"] },
+      repos, apiRepos: [],
+    });
+    await settle(1400);
+    const S = w.win.Shelves;
+    assert(ctx, S.isMine() === true,
+      "no evidence either way must degrade to mine, got " + S.isMine());
+    if (typeof S.signedIn === "function") {
+      assert(ctx, S.signedIn() === null,
+        "and the session reads as UNKNOWN, not as signed out, got: " +
+        JSON.stringify(S.signedIn()));
+    }
+    assert(ctx, w.counters.calls.some((c) => c.auth),
+      "the token is still sent, calls: " + JSON.stringify(w.counters.calls));
+    assert(ctx, w.counters.scraped.length === repos.length,
+      "and rung 4 still reads every unanswered row, scraped " +
+      w.counters.scraped.length + " of " + repos.length);
+    assert(ctx, Object.keys(w.store.local.repoFacts || {}).length === repos.length,
+      "and caches them, got " + Object.keys(w.store.local.repoFacts || {}).length);
+    ctx.info = "unknown: mine, token sent, " + w.counters.scraped.length + " scraped";
+  }),
+
+  check("signed out — signed in with the meta moved still counts as mine", async (ctx) => {
+    /* `<body class="logged-in">` with no readable login: the reader IS signed
+       in and we cannot say who. That is today's "cannot tell", and must stay
+       "mine" — the logged-in body is evidence of a session, never of a
+       stranger. */
+    const repos = [{ name: "r1", topics: ["aiproject"] }];
+    const w = build({
+      signedInNoMeta: true, owner: "whoever", token: "github_pat_X",
+      settings: { groups: ["aiproject"] },
+      repos, apiRepos: [],
+    });
+    await settle(1400);
+    const S = w.win.Shelves;
+    assert(ctx, S.viewer() === "", "the login is unreadable here, got: " + JSON.stringify(S.viewer()));
+    assert(ctx, S.isMine() === true,
+      "signed in with the meta moved counts as mine, got " + S.isMine());
+    if (typeof S.signedIn === "function") {
+      assert(ctx, S.signedIn() === true,
+        "and the session reads as signed in, got: " + JSON.stringify(S.signedIn()));
+    }
+    assert(ctx, w.counters.calls.some((c) => c.auth && /\/user\/repos/.test(c.url)),
+      "the token is sent to /user/repos, calls: " + JSON.stringify(w.counters.calls));
+    assert(ctx, w.counters.scraped.length === repos.length,
+      "and rung 4 still runs, scraped " + w.counters.scraped.length + " of " + repos.length);
+    ctx.info = "logged-in body, no meta: mine, token sent";
+  }),
+
+  check("signed out — the tri-state reads positive evidence only", async (ctx) => {
+    /* THE GUARD AS A FUNCTION, over hand-built heads and headers — the
+       shapes a session can arrive in, one at a time, so a scenario above that
+       goes red can be told apart from the one marker that moved. */
+    const w = build({ owner: "octo", repos: [] });
+    await settle(200);
+    const S = w.win.Shelves;
+    assert(ctx, typeof S.signedIn === "function", "S.signedIn is missing");
+    if (typeof S.signedIn !== "function") return;
+    const Parser = new w.win.DOMParser();
+    const doc = (head, body) => Parser.parseFromString(
+      "<!doctype html><html><head>" + head + "</head>" + body + "</html>", "text/html");
+    const loc = { pathname: "/torvalds" };
+    const cases = [
+      ["logged-out body + empty meta", '<meta name="user-login" content="">',
+        '<body class="logged-out env-production"></body>', false, false],
+      ["logged-out header alone", "",
+        '<body><header class="Header-old header-logged-out"><a href="/login">Sign in</a></header></body>',
+        false, false],
+      ["logged-out body alone", "", '<body class="logged-out"></body>', false, false],
+      /* PRESENT AND EMPTY is GitHub saying "nobody"; ABSENT is the markup
+         having moved. The two must never read the same. */
+      ["empty user-login meta alone", '<meta name="user-login" content="">', "<body></body>",
+        false, false],
+      /* A BARE /login LINK IS NOT EVIDENCE: the repo page carries one outside
+         the header, and signed-in pages carry `return_to` links too. Reading it
+         as "signed out" would take the reader's own profile away from them. */
+      ["a /login link and nothing else", "",
+        '<body><a href="/login?return_to=%2Ftorvalds">Sign in</a></body>', null, true],
+      ["no evidence at all", "", "<body></body>", null, true],
+      ["logged-in body, meta moved", "", '<body class="logged-in"></body>', true, true],
+      ["meta names a stranger", '<meta name="user-login" content="me">',
+        '<body class="logged-in"></body>', true, false],
+      ["meta names the owner", '<meta name="user-login" content="Torvalds">',
+        '<body class="logged-in"></body>', true, true],
+      ["signed in, a Sign in link elsewhere on the page", "",
+        '<body class="logged-in"><a href="/login">Sign in</a></body>', true, true],
+    ];
+    let ok = 0;
+    for (const [label, head, body, want, mine] of cases) {
+      const d = doc(head, body);
+      const got = S.signedIn(d);
+      const gotMine = S.isMine(loc, d);
+      if (got === want && gotMine === mine) { ok++; continue; }
+      assert(ctx, false, label + ": signedIn " + JSON.stringify(got) + " (want " +
+        JSON.stringify(want) + "), isMine " + gotMine + " (want " + mine + ")");
+    }
+    ctx.info = ok + " of " + cases.length + " session shapes read correctly";
+  }),
+
   check("backoff and unread - GitHub says stop, and the reader is told", async (ctx) => {
     const w = build({
       viewer: "me", owner: "me",

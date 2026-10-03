@@ -143,15 +143,54 @@ globalThis.Shelves = globalThis.Shelves || {};
    * UNKNOWN COUNTS AS MINE. If the meta moves, answering "not yours" would
    * disable the extension for everybody at once; answering "yours" restores
    * exactly today's behaviour for the one case we cannot read. Principle III
-   * says a missing input costs a feature, never the page. */
+   * says a missing input costs a feature, never the page.
+   *
+   * BUT SIGNED OUT IS NOT UNKNOWN. Logged-out browsing is a routine state, not
+   * a markup change, and it read as one: no login in the meta, so every
+   * profile on GitHub was "mine" — the reader's token went to `/user/repos` on
+   * torvalds' tab and rung 4 cached a hundred of his repo pages for the
+   * top-up to refresh forever. So silence is now split in two, and only the
+   * half with no evidence either way keeps the benefit of the doubt. */
+  const metaLogin = (doc, n) => {
+    const m = doc.querySelector('meta[name="' + n + '"]');
+    return m ? String(m.getAttribute("content") || "").trim().toLowerCase() : null;
+  };
+
+  /* WHO IS SIGNED IN, as three answers rather than two:
+   *   true   a login is readable, or the page says it is signed in
+   *   false  POSITIVE evidence of a signed-out page
+   *   null   no evidence either way — the markup moved, decide nothing
+   *
+   * MEASURED on four signed-out pages (2026-10-03: a profile, a repo, an org
+   * and an org's profile), all agreeing: `<meta name="user-login" content="">`
+   * present and EMPTY (absent would be unknown, not out), `<body class=
+   * "logged-out …">`, and `<header class="… header-logged-out">`. Any one is
+   * enough. `logged-in` on the body is checked first and wins, so a stray
+   * marker can never sign a reader out of their own profile. Not used: a
+   * `/login` link (the repo page carries one outside the header, and signed-in
+   * pages carry `return_to` links too) or `.HeaderMenu--logged-out` (gone). */
+  S.signedIn = function signedIn(doc) {
+    doc = doc || document;
+    if (metaLogin(doc, "user-login") || metaLogin(doc, "octolytics-actor-login")) return true;
+    const body = doc.body && doc.body.classList;
+    if (body && body.contains("logged-in")) return true;
+    if ((body && body.contains("logged-out")) ||
+        metaLogin(doc, "user-login") === "" ||
+        doc.querySelector("header.header-logged-out")) return false;
+    return null;
+  };
+
   S.viewer = function viewer(doc) {
     doc = doc || document;
-    const metas = ["user-login", "octolytics-actor-login"];
-    for (const n of metas) {
-      const m = doc.querySelector('meta[name="' + n + '"]');
-      const v = m && String(m.getAttribute("content") || "").trim().toLowerCase();
+    for (const n of ["user-login", "octolytics-actor-login"]) {
+      const v = metaLogin(doc, n);
       if (v) return v;
     }
+    /* ONLY WHEN SOMEBODY IS SIGNED IN. `[data-login]` is not the viewer's by
+     * definition — avatars and hovercards on a profile carry the OWNER's and
+     * the members' logins — so on a signed-out page the first one found would
+     * name the owner, and that stranger's profile would be "mine" again. */
+    if (S.signedIn(doc) === false) return "";
     // the header avatar carries it too, and has outlived several markup changes
     const av = doc.querySelector("[data-login]");
     const d = av && String(av.getAttribute("data-login") || "").trim().toLowerCase();
@@ -160,8 +199,12 @@ globalThis.Shelves = globalThis.Shelves || {};
 
   S.isMine = function isMine(loc, doc) {
     const who = S.viewer(doc);
-    if (!who) return true;                   // cannot tell: behave as before
-    return who === S.owner(loc);
+    if (who) return who === S.owner(loc);
+    /* Signed out, there is no "mine": the free rungs only, no token, no
+     * scraping, no cache write, no verbs that write the reader's setup. A
+     * signed-in page whose login moved, and a page with no evidence at all,
+     * keep today's behaviour (P.III). */
+    return S.signedIn(doc) !== false;
   };
 
   /* MEASURED (charter §5): GitHub lowercases topics, so every topic in the

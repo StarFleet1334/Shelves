@@ -320,9 +320,14 @@ globalThis.Shelves = globalThis.Shelves || {};
      * own session. It is not spent on anyone else's profile. */
     let deferred = 0;
     if (missing.length && !mine) {
-      warning = warning || ("someone else's profile — free rungs only, " +
-                            missing.length + " unread");
-      return { topics, facts, source: rungs.join(" + ") + " · not yours",
+      /* SIGNED OUT IS SAID AS SIGNED OUT. It may well be the reader's own
+       * profile, and "someone else's" would be a guess presented as a fact;
+       * the remedy is different too — sign in, not go home (P.IV). */
+      const out = S.signedIn() === false;
+      warning = warning || ((out ? "signed out" : "someone else's profile") +
+                            " — free rungs only, " + missing.length + " unread");
+      return { topics, facts,
+               source: rungs.join(" + ") + (out ? " · signed out" : " · not yours"),
                warning, health: "", deferred: 0 };
     }
 
