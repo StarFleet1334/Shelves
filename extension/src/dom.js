@@ -165,7 +165,10 @@ globalThis.Shelves = globalThis.Shelves || {};
    * and an org's profile), all agreeing: `<meta name="user-login" content="">`
    * present and EMPTY (absent would be unknown, not out), `<body class=
    * "logged-out …">`, and `<header class="… header-logged-out">`. Any one is
-   * enough. `logged-in` on the body is checked first and wins, so a stray
+   * enough. MEASURED signed in too (the same day, three pages: home, the
+   * reader's own tab, a stranger's): both login metas filled, `<body class=
+   * "logged-in …">`, no `header-logged-out`, and one `[data-login]` — the
+   * reader's own. `logged-in` on the body is checked first and wins, so a stray
    * marker can never sign a reader out of their own profile. Not used: a
    * `/login` link (the repo page carries one outside the header, and signed-in
    * pages carry `return_to` links too) or `.HeaderMenu--logged-out` (gone). */

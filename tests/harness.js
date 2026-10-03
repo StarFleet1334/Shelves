@@ -3297,6 +3297,302 @@ const SCENARIOS = [
     ctx.info = ok + " of " + cases.length + " session shapes read correctly";
   }),
 
+  /* ── THE STRANGER CACHE ────────────────────────────────────────────────
+     The signed-out bug is fixed, but what it wrote is not undone by fixing it:
+     every stranger's repo page it scraped is still sitting in repoFacts, and
+     neither eviction path can reach it. `prune` waits for 90 untouched days,
+     and the top-up touches everything it finds — so a polluted record is
+     refreshed, with the reader's session cookie, forever. These scenarios hold
+     the sweep to its two halves: once the reader is KNOWN, nobody else's
+     record survives a write or earns a fetch; while the reader is NOT known,
+     nothing is decided at all. */
+
+  check("stranger cache — the top-up sweeps another owner's records and never fetches them",
+    async (ctx) => {
+    const day = 86400000;
+    const now = Date.now();
+    const mine = ["old-one", "older"];
+    const theirs = ["linux", "subsurface", "git"];
+    const cache = {};
+    mine.forEach((n, i) => { cache["octo/" + n] = { at: now - (20 + i) * day, topics: [] }; });
+    /* STALER THAN THE READER'S OWN, on purpose: stalest-first would put every
+       stranger at the head of the queue, so a sweep that only filtered the
+       write (and not the due list) is caught spending the budget on them. */
+    theirs.forEach((n, i) => { cache["torvalds/" + n] = { at: now - (60 + i) * day, topics: [] }; });
+    const w = build({
+      owner: "octo", viewer: "octo", at: "octo/throttle-kit", page: { topics: ["rag"] },
+      repos: mine.map((n) => ({ name: n, topics: ["rag"], description: "warmed" })),
+      cache,
+    });
+    await settle();
+    const S = w.win.Shelves;
+    /* EVERY SAME-ORIGIN FETCH, not just the ones world.js can answer — a
+       stranger's page 404s there, so `counters.scraped` alone would never see
+       the request that is the whole bug. */
+    const fetched = [];
+    const inner = w.win.fetch;
+    w.win.fetch = async (u, o) => { fetched.push(String(u)); return inner(u, o); };
+
+    assert(ctx, S.viewer() === "octo", "fixture: the reader must be readable, got " +
+      JSON.stringify(S.viewer()));
+    const out = await S.warm({ cacheDays: 7, warmBatch: 10, prewarm: true }, { gap: 0, now });
+
+    const strangers = fetched.filter((u) => /\/torvalds\//i.test(u));
+    assert(ctx, strangers.length === 0,
+      "a stranger's repo page must never be fetched by the top-up, fetched " +
+      strangers.length + ": " + strangers.join(", "));
+    assert(ctx, out.warmed === mine.length,
+      "the reader's own stale entries are still refreshed, warmed " + out.warmed +
+      " of " + mine.length + " (" + JSON.stringify(out) + ")");
+    assert(ctx, out.swept === theirs.length,
+      "the return says how many were swept, got swept=" + JSON.stringify(out.swept) +
+      " want " + theirs.length);
+    const after = Object.keys(w.store.local.repoFacts || {});
+    const left = after.filter((k) => /^torvalds\//i.test(k));
+    assert(ctx, left.length === 0,
+      "no torvalds record may survive the write, left " + left.length + ": " + left.join(", "));
+    const kept = mine.filter((n) => after.includes("octo/" + n));
+    assert(ctx, kept.length === mine.length,
+      "and every one of the reader's own is kept, kept " + kept.length + " of " + mine.length +
+      ": " + after.join(", "));
+    ctx.info = "warmed " + out.warmed + ", swept " + out.swept + ", " +
+      strangers.length + " stranger fetches";
+  }),
+
+  check("stranger cache — the sweep is written even when nothing is due", async (ctx) => {
+    /* THE ONE-TIME CLEANUP CANNOT WAIT FOR A STALE ENTRY. A reader whose own
+       cache is fresh would otherwise carry the strangers until something of
+       theirs aged past half the TTL — and the strangers are exactly the
+       records that are being refreshed, so that day could be a long way off. */
+    const now = Date.now();
+    const w = build({
+      owner: "octo", viewer: "octo", at: "octo/throttle-kit", page: { topics: [] },
+      repos: [{ name: "a", topics: [] }, { name: "b", topics: [] }],
+      cache: {
+        "octo/a": { at: now - 60000, topics: [] },
+        "octo/b": { at: now - 60000, topics: [] },
+        "torvalds/linux": { at: now - 60000, topics: [] },
+        "Torvalds/Git": { at: now - 60000, topics: [] },     // case is not identity
+      },
+    });
+    await settle();
+    const S = w.win.Shelves;
+    const fetched = [];
+    const inner = w.win.fetch;
+    w.win.fetch = async (u, o) => { fetched.push(String(u)); return inner(u, o); };
+
+    const out = await S.warm({ cacheDays: 7, warmBatch: 6, prewarm: true }, { gap: 0, now });
+    assert(ctx, fetched.length === 0,
+      "a fresh cache costs zero requests, fetched: " + fetched.join(", "));
+    assert(ctx, out.warmed === 0, "nothing was due, warmed " + out.warmed);
+    assert(ctx, out.swept === 2, "two strangers swept, got swept=" + JSON.stringify(out.swept));
+    const after = Object.keys(w.store.local.repoFacts || {});
+    assert(ctx, !after.some((k) => /^torvalds\//i.test(k)),
+      "the strangers are gone from the store even though nothing was warmed, left: " +
+      after.join(", "));
+    assert(ctx, after.includes("octo/a") && after.includes("octo/b"),
+      "and the reader's fresh entries are untouched, got: " + after.join(", "));
+    ctx.info = "0 fetches, swept " + out.swept + ", store: " + after.join(", ");
+  }),
+
+  check("stranger cache — the cleanup does not wait for the top-up's opt-in", async (ctx) => {
+    /* PREWARM IS OFF BY DEFAULT, so a sweep that lived behind it would reach
+       almost nobody. The opt-in is consent to SPEND requests; the sweep spends
+       none, so it runs regardless — and the top-up itself still stands down. */
+    const now = Date.now();
+    const w = build({
+      owner: "octo", viewer: "octo", at: "octo/throttle-kit", page: { topics: [] },
+      repos: [{ name: "a", topics: [] }],
+      cache: {
+        "octo/a": { at: now - 40 * 86400000, topics: [] },
+        "torvalds/linux": { at: now - 40 * 86400000, topics: [] },
+      },
+    });
+    await settle();
+    const S = w.win.Shelves;
+    const fetched = [];
+    const inner = w.win.fetch;
+    w.win.fetch = async (u, o) => { fetched.push(String(u)); return inner(u, o); };
+
+    const out = await S.warm({ cacheDays: 7, warmBatch: 6, prewarm: false }, { gap: 0, now });
+    assert(ctx, fetched.length === 0,
+      "with the top-up off nothing is fetched, fetched: " + fetched.join(", "));
+    assert(ctx, out.why === "off" && out.swept === 1,
+      "it reports off AND the one stranger swept, got: " + JSON.stringify(out));
+    const after = Object.keys(w.store.local.repoFacts || {});
+    assert(ctx, after.length === 1 && after[0] === "octo/a",
+      "only the reader's record survives, got: " + after.join(", "));
+    ctx.info = "prewarm off: 0 fetches, swept " + out.swept + ", store: " + after.join(", ");
+  }),
+
+  check("stranger cache — signed out, the top-up does nothing", async (ctx) => {
+    /* SIGNED OUT, THERE IS NO SESSION TO SPEND AND NO READER TO KEEP FOR.
+       So the top-up stands down entirely — and it also does not sweep: with
+       nobody signed in there is no "own" to keep, and an empty owner would
+       read every record in the cache as a stranger's. The cleanup waits for
+       the reader to come back. */
+    const day = 86400000;
+    const now = Date.now();
+    const seed = {
+      "octo/a": { at: now - 40 * day, topics: [] },
+      "torvalds/linux": { at: now - 40 * day, topics: [] },
+    };
+    const w = build({
+      signedOut: true, owner: "octo", at: "octo/throttle-kit", page: { topics: [] },
+      repos: [{ name: "a", topics: [] }],
+      cache: JSON.parse(JSON.stringify(seed)),
+    });
+    await settle();
+    const S = w.win.Shelves;
+    const fetched = [];
+    const inner = w.win.fetch;
+    w.win.fetch = async (u, o) => { fetched.push(String(u)); return inner(u, o); };
+
+    const out = await S.warm({ cacheDays: 7, warmBatch: 6, prewarm: true }, { gap: 0, now });
+    assert(ctx, fetched.length === 0,
+      "signed out, the top-up must fetch nothing, fetched: " + fetched.join(", "));
+    assert(ctx, out.warmed === 0 && out.why === "signed out",
+      "and it says why, got: " + JSON.stringify(out));
+    const after = w.store.local.repoFacts || {};
+    assert(ctx, JSON.stringify(Object.keys(after).sort()) === JSON.stringify(Object.keys(seed).sort()),
+      "with no reader known nothing is swept, got: " + Object.keys(after).join(", "));
+    assert(ctx, Object.keys(seed).every((k) => after[k] && after[k].at === seed[k].at),
+      "and nothing is rewritten either — every `at` is as seeded");
+    ctx.info = "signed out: " + fetched.length + " fetches, why=" + out.why;
+  }),
+
+  check("stranger cache — unknown reader, unchanged", async (ctx) => {
+    /* THE OVER-CORRECTION GUARD, again. No login and no signed-out evidence is
+       "GitHub moved the meta", not "nobody". Sweeping there would treat the
+       reader's whole cache as a stranger's and charge them a cold run; so the
+       top-up must behave exactly as it did before the sweep existed — every
+       stale entry, whoever owns it, refreshed. */
+    const day = 86400000;
+    const now = Date.now();
+    const w = build({
+      owner: "octo", at: "octo/throttle-kit", page: { topics: [] },
+      repos: [{ name: "a", topics: [] }],
+      cache: {
+        "octo/a": { at: now - 40 * day, topics: [] },
+        "torvalds/linux": { at: now - 41 * day, topics: [] },
+      },
+    });
+    await settle();
+    const S = w.win.Shelves;
+    assert(ctx, S.signedIn() === null && S.viewer() === "",
+      "fixture: the session must read as UNKNOWN, got signedIn=" +
+      JSON.stringify(S.signedIn()) + " viewer=" + JSON.stringify(S.viewer()));
+    /* world.js only answers the profile owner's pages, and a 404 ends the
+       visit — so the stranger's page is answered here, or the scenario would
+       prove only that warm stops on a 404. */
+    const fetched = [];
+    const inner = w.win.fetch;
+    w.win.fetch = async (u, o) => {
+      fetched.push(String(u));
+      if (/\/torvalds\//i.test(String(u))) {
+        return { ok: true, status: 200, text: async () => "<!doctype html><html><body></body></html>" };
+      }
+      return inner(u, o);
+    };
+
+    const out = await S.warm({ cacheDays: 7, warmBatch: 6, prewarm: true }, { gap: 0, now });
+    assert(ctx, out.warmed === 2,
+      "every stale entry is refreshed, whoever owns it, got: " + JSON.stringify(out));
+    assert(ctx, fetched.some((u) => /\/torvalds\/linux/i.test(u)) &&
+                fetched.some((u) => /\/octo\/a/i.test(u)),
+      "both owners are fetched, as before, got: " + fetched.join(", "));
+    assert(ctx, !out.swept,
+      "and nothing is swept, got swept=" + JSON.stringify(out.swept));
+    const after = w.store.local.repoFacts || {};
+    assert(ctx, after["torvalds/linux"] && after["torvalds/linux"].at > now - 1000,
+      "the stranger's record is kept and refreshed exactly as before, got: " +
+      JSON.stringify(after["torvalds/linux"]));
+    assert(ctx, after["octo/a"] && after["octo/a"].at > now - 1000,
+      "and so is the reader's");
+    ctx.info = "unknown: warmed " + out.warmed + ", swept " + (out.swept || 0);
+  }),
+
+  check("stranger cache — a foreground run on your own profile drops strangers on write",
+    async (ctx) => {
+    /* THE OTHER WRITER. Rung 4 writes the cache too, on the one page where the
+       reader is most certainly known — so the first time they open their own
+       profile is a cleanup, whether or not the top-up was ever switched on. */
+    const now = Date.now();
+    const repos = [{ name: "r1", topics: ["aiproject"] }, { name: "r2", topics: ["aiproject"] }];
+    const w = build({
+      owner: "octo", viewer: "octo",
+      settings: { groups: ["aiproject"] },
+      repos, apiRepos: [],                       // API answers nothing -> rung 4
+      cache: {
+        "torvalds/linux": { at: now - 60000, topics: ["kernel"] },
+        "torvalds/git": { at: now - 60000, topics: [] },
+        "TORVALDS/subsurface": { at: now - 60000, topics: [] },
+      },
+    });
+    await settle(1400);
+    const S = w.win.Shelves;
+    assert(ctx, S.isMine() === true, "fixture: octo's own profile, got isMine()=" + S.isMine());
+    assert(ctx, w.counters.scraped.length === repos.length,
+      "rung 4 ran, scraped " + w.counters.scraped.length + " of " + repos.length);
+    const after = Object.keys(w.store.local.repoFacts || {});
+    const left = after.filter((k) => /^torvalds\//i.test(k));
+    assert(ctx, left.length === 0,
+      "the foreground write drops every stranger, left " + left.length + ": " + left.join(", "));
+    const ours = repos.filter((r) => after.includes("octo/" + r.name));
+    assert(ctx, ours.length === repos.length,
+      "and writes the reader's new records, got " + ours.length + " of " + repos.length +
+      ": " + after.join(", "));
+    ctx.info = "rung 4 wrote " + ours.length + ", strangers left " + left.length;
+  }),
+
+  check("stranger cache — sweep is pure, case-blind, and decides nothing without a reader",
+    async (ctx) => {
+    const w = build({ owner: "octo", repos: [] });
+    await settle(200);
+    const S = w.win.Shelves;
+    assert(ctx, S.cache && typeof S.cache.sweep === "function",
+      "S.cache.sweep is missing — nothing can drop a stranger's record");
+    if (!(S.cache && typeof S.cache.sweep === "function")) return;
+
+    const input = {
+      "Octo/a": { at: 1 },
+      "octo/b": { at: 2 },
+      "OCTO/C": { at: 3 },
+      "torvalds/linux": { at: 4 },
+      /* AN OWNER IS A WHOLE SEGMENT, not a prefix: these are other people. */
+      "octopus/ink": { at: 5 },
+      "octo-fan/x": { at: 6 },
+      /* MALFORMED: no owner at all is nobody's, so it does not survive. */
+      "/orphan": { at: 7 },
+      "": { at: 8 },
+    };
+    const snapshot = JSON.stringify(input);
+    const got = S.cache.sweep(input, "OcTo");
+    const keys = Object.keys((got && got.cache) || {}).sort();
+    assert(ctx, JSON.stringify(keys) === JSON.stringify(["OCTO/C", "Octo/a", "octo/b"]),
+      "only the reader's own survive, in any case, got: " + JSON.stringify(keys));
+    assert(ctx, got && got.dropped === 5, "five dropped, got " + JSON.stringify(got && got.dropped));
+    assert(ctx, got && got.cache["Octo/a"] === input["Octo/a"],
+      "a kept record is the record, not a copy that could drift");
+    assert(ctx, JSON.stringify(input) === snapshot,
+      "PURE: the input must not be mutated, got: " + JSON.stringify(input));
+
+    let falsy = 0;
+    for (const who of ["", null, undefined]) {
+      const r = S.cache.sweep(input, who);
+      const same = r && r.dropped === 0 &&
+        JSON.stringify(Object.keys(r.cache).sort()) === JSON.stringify(Object.keys(input).sort());
+      if (same) falsy++;
+      else assert(ctx, false, "viewer " + JSON.stringify(who) + " must keep everything, got: " +
+        JSON.stringify(r && { dropped: r.dropped, keys: Object.keys(r.cache || {}) }));
+    }
+    const none = S.cache.sweep({}, "octo");
+    assert(ctx, none && none.dropped === 0 && Object.keys(none.cache).length === 0,
+      "an empty cache sweeps to an empty cache, got: " + JSON.stringify(none));
+    ctx.info = keys.length + " kept, " + (got && got.dropped) + " dropped; " +
+      falsy + " of 3 falsy viewers decided nothing";
+  }),
+
   check("backoff and unread - GitHub says stop, and the reader is told", async (ctx) => {
     const w = build({
       viewer: "me", owner: "me",

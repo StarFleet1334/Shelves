@@ -65,13 +65,29 @@ globalThis.Shelves = globalThis.Shelves || {};
     const o = opts || {};
     const now = o.now || Date.now();
 
-    if (!settings.prewarm) return { warmed: 0, why: "off" };
-    if (S.isRepoTab()) return { warmed: 0, why: "the profile tab warms itself" };
-    if (!visible()) return { warmed: 0, why: "tab not visible" };
+    /* THE ONE-TIME CLEANUP LIVES HERE because this is the path that kept the
+     * strangers alive — and it runs BEFORE the opt-in, because the opt-in is
+     * consent to spend requests and this spends none. With the top-up off a
+     * polluted record would only age out after ninety days; here it goes on
+     * the next github.com page a signed-in reader opens. Swept before `due` is
+     * built, so another owner's record is never fetched again, and written
+     * even when nothing is due. An unknown reader sweeps nothing. */
+    const read = await S.cache.read();
+    const viewer = S.viewer ? S.viewer() : "";
+    const { cache, dropped: swept } = S.cache.sweep(read, viewer);
+    if (swept) await S.cache.write(cache, settings);
 
-    const cache = await S.cache.read();
+    if (!settings.prewarm) return { warmed: 0, swept, why: "off" };
+    if (S.isRepoTab()) return { warmed: 0, why: "the profile tab warms itself", swept };
+    if (!visible()) return { warmed: 0, why: "tab not visible", swept };
+    /* SIGNED OUT, THERE IS NOBODY TO WARM FOR. The cache exists for the
+     * reader's private repos, which a signed-out fetch can only answer with a
+     * 404 — and with no login readable there is no telling the reader's
+     * records from a stranger's, so nothing here may spend a request. */
+    if (S.signedIn && S.signedIn() === false) return { warmed: 0, swept, why: "signed out" };
+
     const names = Object.keys(cache);
-    if (!names.length) return { warmed: 0, why: "nothing cached to refresh yet" };
+    if (!names.length) return { warmed: 0, swept, why: "nothing cached to refresh yet" };
 
     /* HALFWAY THROUGH THE TTL, not at the end of it. Refreshing on expiry means
      * the reader still meets a cold entry every time they arrive first; topping
@@ -88,7 +104,7 @@ globalThis.Shelves = globalThis.Shelves || {};
       .sort((a, b) => ((cache[a] || {}).at || 0) - ((cache[b] || {}).at || 0))
       .slice(0, settings.warmBatch);
 
-    if (!due.length) return { warmed: 0, why: "cache is fresh" };
+    if (!due.length) return { warmed: 0, swept, why: "cache is fresh" };
 
     let warmed = 0;
     let why = "";
@@ -116,7 +132,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     }
 
     if (warmed) await S.cache.write(cache, settings);
-    return { warmed, why: why || "topped up " + warmed + " of " + due.length };
+    return { warmed, swept, why: why || "topped up " + warmed + " of " + due.length };
   };
 
   /** Kicked from main.js on any github.com page that is not the profile tab. */

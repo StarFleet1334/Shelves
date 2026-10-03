@@ -145,7 +145,35 @@ globalThis.Shelves = globalThis.Shelves || {};
      * above any real account and far below anything that would strain the
      * quota. Newest survive, because those are the ones being looked at. */
     write(cache, settings) {
-      return set("local", { [FACTS_KEY]: S.cache.prune(cache, settings) });
+      /* EVERY WRITE IS ALSO A SWEEP, once the reader is known. `S.viewer` is
+       * absent in the options page, which loads this file without dom.js;
+       * there the write is exactly what it was. */
+      const who = typeof S.viewer === "function" ? S.viewer() : "";
+      const kept = S.cache.sweep(cache, who).cache;
+      return set("local", { [FACTS_KEY]: S.cache.prune(kept, settings) });
+    },
+    /* ONLY THE READER'S OWN REPOSITORIES BELONG HERE. Rung 4 runs only on a
+     * profile that is `isMine()`, so a record owned by anybody else is a
+     * leftover of the signed-out bug — which counted every profile on GitHub
+     * as the reader's and cached a hundred of a stranger's repo pages per
+     * visit. Age could never clear them: the top-up refreshes `at` on
+     * everything it finds, so a polluted record was re-fetched, with the
+     * reader's session cookie, forever.
+     *
+     * PURE, and an unknown reader decides nothing. With no readable login
+     * there is no "own" to keep, and sweeping on a guess would throw away
+     * the reader's real cache and charge them a cold run to earn it back. */
+    sweep(cache, viewer) {
+      const c = cache && typeof cache === "object" ? cache : {};
+      const who = String(viewer || "").trim().toLowerCase();
+      if (!who) return { cache: c, dropped: 0 };
+      const out = {};
+      let dropped = 0;
+      Object.keys(c).forEach((k) => {
+        if (String(k).split("/")[0].toLowerCase() === who) out[k] = c[k];
+        else dropped++;
+      });
+      return { cache: out, dropped };
     },
     prune(cache, settings, now) {
       const c = cache && typeof cache === "object" ? cache : {};
