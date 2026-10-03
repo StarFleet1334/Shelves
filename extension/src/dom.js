@@ -357,6 +357,84 @@ globalThis.Shelves = globalThis.Shelves || {};
 
   S.hidePager = function hidePager() {
     const pager = document.querySelector(".paginate-container");
-    if (pager) pager.style.display = "none";
+    if (!pager) return;
+    pager.style.display = "none";
+    pager.dataset.shHid = "1";   // so `unshelve` gives back only what we took
+  };
+
+  /* ---- the page as GitHub drew it, put back -------------------------------
+   * TURBO CACHES A CORPSE UNLESS WE HAND IT THE ORIGINAL. On every in-page
+   * navigation Turbo snapshots the body — a deep clone, so every listener on
+   * the host is gone — and Back restores that clone. The id was still there,
+   * so `run()` declined to rebuild and the reader got shelves that looked
+   * right and answered nothing: no find, no grip, no keys, and, if a filter
+   * was on when the snapshot was taken, rows hidden by `sh-hide` beside an
+   * empty find box with no control left on the page that could show them.
+   *
+   * So the host is taken apart again and GitHub's own list is put back where
+   * it stood: the same row nodes, in the order GitHub drew them, with every
+   * mark we made on them removed — because every guard in render() reads
+   * those marks as "already decorated" and would keep the dead ones.
+   *
+   * IT WORKS ON A CLONE TOO, which is the other caller. Nothing it needs
+   * lives in a closure: the list's own shell rides inside the host in a
+   * <template> (cloned with it), and each page-one row carries `data-sh-i`.
+   * Rows merged from pages 2..N carry no index and are dropped — they were
+   * copies of another document's rows, and the pager they came from is
+   * shown again. */
+  const SHELL = "sh-source";
+
+  S.keepSource = function keepSource(host, ul) {
+    if (!host || !ul || host.querySelector(":scope > template." + SHELL)) return;
+    const tpl = document.createElement("template");
+    tpl.className = SHELL;
+    const shell = ul.cloneNode(false);
+    delete shell.dataset[DONE];
+    tpl.content.appendChild(shell);
+    host.appendChild(tpl);
+  };
+
+  S.unshelve = function unshelve(host) {
+    if (!host || !host.parentNode) return null;
+    const tpl = host.querySelector(":scope > template." + SHELL);
+    let ul = tpl && tpl.content.firstElementChild
+      ? document.importNode(tpl.content.firstElementChild, false)
+      : null;
+    if (!ul) {
+      /* No shell to be had: the shelf lists copied the source's class, which
+       * is what the finder's selectors care about. */
+      ul = document.createElement("ul");
+      const like = host.querySelector("ul");
+      if (like) ul.className = like.className;
+    }
+    delete ul.dataset[DONE];
+
+    const rows = Array.from(host.querySelectorAll("li[data-sh-i]"))
+      .sort((a, b) => Number(a.dataset.shI) - Number(b.dataset.shI));
+
+    for (const li of rows) {
+      li.querySelectorAll(".sh-margin").forEach((m) => m.remove());
+      li.querySelectorAll(".sh-col").forEach((c) => c.classList.remove("sh-col"));
+      li.classList.remove("sh-hide");
+      for (const k of Object.keys(li.dataset)) {
+        if (/^sh[A-Z]/.test(k)) delete li.dataset[k];
+      }
+      ul.appendChild(li);
+    }
+
+    host.replaceWith(ul);
+    document.querySelectorAll("#sh-status").forEach((s) => s.remove());
+    document.querySelectorAll(".paginate-container[data-sh-hid]").forEach((p) => {
+      p.style.display = "";
+      delete p.dataset.shHid;
+    });
+    return ul;
+  };
+
+  /* A host is LIVE only if this script instance built it. `rebucket` is a
+   * property on the element, and a clone — Turbo's snapshot — never carries
+   * one. */
+  S.isLiveHost = function isLiveHost(host) {
+    return !!host && host.isConnected && typeof host.rebucket === "function";
   };
 })(globalThis.Shelves);

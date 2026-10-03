@@ -9,6 +9,10 @@ globalThis.Shelves = globalThis.Shelves || {};
   "use strict";
 
   let busy = false;
+  /* Bumped by every `turbo:before-cache` that took a host apart. A run that
+   * was still in flight when it happened was building for a page that is no
+   * longer there; see the `finally` in run(). */
+  let unshelved = 0;
 
   /* READ THE REST — the scrape ceiling lifted for exactly one pass.
    *
@@ -22,11 +26,20 @@ globalThis.Shelves = globalThis.Shelves || {};
   async function run() {
     if (busy) return;                                   // re-entrancy
     if (!S.isRepoTab()) return;                         // wrong route
-    if (document.getElementById(S.HOST_ID)) return;     // already shelved
+    /* ALREADY SHELVED — but only if WE shelved it. A host this script did
+     * not build is a Turbo snapshot restored by Back: a clone, every listener
+     * gone. Returning on its id is what left the page inert, so it is taken
+     * apart and the pass runs as if GitHub had just drawn the list. */
+    const had = document.getElementById(S.HOST_ID);
+    if (had) {
+      if (S.isLiveHost(had)) return;
+      S.unshelve(had);
+    }
     const sourceUl = S.findList();
     if (!sourceUl) return;                              // nothing to shelve
 
     busy = true;
+    const epoch = unshelved;
     const status = S.status("shelving…");
     let swapped = false;
 
@@ -47,6 +60,11 @@ globalThis.Shelves = globalThis.Shelves || {};
       const owner = S.owner();
 
       let rows = S.rowsOf(sourceUl);
+      /* GITHUB'S ORDER, WRITTEN ON THE ROW. Shelving and pinning reorder the
+       * rows and nothing else remembers where they stood; `unshelve` needs it
+       * from a clone, where no closure survives. Page one only — merged rows
+       * are copies and do not go back. */
+      rows.forEach((li, i) => { li.dataset.shI = String(i); });
       /* WHAT THE MERGE COULD NOT REACH, carried as far as the toolbar.
        * `stopped` starts at "off" because that is the honest answer when
        * `fetchAllPages` is false: page one is not all there is, it is all we
@@ -177,6 +195,7 @@ globalThis.Shelves = globalThis.Shelves || {};
             handlers: shelfHandlers(),
           });
           host.dataset.provisional = "1";
+          S.keepSource(host, sourceUl);
           sourceUl.replaceWith(host);
           swapped = true;
         }
@@ -245,6 +264,7 @@ globalThis.Shelves = globalThis.Shelves || {};
           total, unread, truncated, pagesRead, stopped,
           handlers: shelfHandlers(),
         });
+        S.keepSource(host, sourceUl);
         sourceUl.replaceWith(host);
         swapped = true;
       }
@@ -418,6 +438,9 @@ globalThis.Shelves = globalThis.Shelves || {};
     } finally {
       status.remove();
       busy = false;
+      /* A pass the cache interrupted held `busy` while Back restored the
+       * page, so the kick that page earned was refused. Earn it again. */
+      if (epoch !== unshelved) kick();
     }
   }
 
@@ -458,6 +481,25 @@ globalThis.Shelves = globalThis.Shelves || {};
   document.addEventListener("turbo:load", kick);
   document.addEventListener("pjax:end", kick);
 
+  /* HAND TURBO THE PAGE GITHUB DREW, NOT OURS. The snapshot taken right after
+   * this event is what Back restores, and a snapshot is a clone — listeners
+   * do not survive it. So the host is taken apart first, and the restored
+   * page is an ordinary unshelved list that run() rebuilds live. `isLiveHost`
+   * in run() is the second net, for a snapshot this event did not precede.
+   *
+   * A pass that has not swapped yet left its list marked consumed and its
+   * status line above it; both are undone too, or the finder would skip the
+   * restored list for good. */
+  document.addEventListener("turbo:before-cache", () => {
+    const host = document.getElementById(S.HOST_ID);
+    if (host) S.unshelve(host);
+    document.querySelectorAll("#sh-status").forEach((s) => s.remove());
+    document.querySelectorAll("ul[data-shelves-done]").forEach((ul) => {
+      if (!ul.closest("#" + S.HOST_ID)) delete ul.dataset[S.DONE];
+    });
+    unshelved++;
+  });
+
   /* Once per load of a github.com page, and never on the profile tab — warm.js
    * refuses there anyway, but saying it twice costs nothing and the second
    * reader of this file should not have to open warm.js to learn it. */
@@ -472,7 +514,11 @@ globalThis.Shelves = globalThis.Shelves || {};
       return;
     }
     if (!S.isRepoTab()) return;
-    if (document.getElementById(S.HOST_ID)) return;
+    const host = document.getElementById(S.HOST_ID);
+    if (host) {
+      if (!S.isLiveHost(host)) kick();   // a restored snapshot — run() rebuilds
+      return;
+    }
     if (S.findList()) kick();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });

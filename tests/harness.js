@@ -70,6 +70,164 @@ function endlessPage(n) {
   ], "/octo?tab=repositories&page=" + (n + 2));
 }
 
+/* TURBO DRIVE, AS IT ACTUALLY BEHAVES ON A BACK BUTTON. Leaving a page, Turbo
+   fires `turbo:before-cache` on the document and THEN deep-clones the body into
+   its snapshot cache — `cloneNode(true)`, so the snapshot has every element and
+   attribute and not one listener. Coming back, it swaps that clone in as the
+   body and fires `turbo:render` and `turbo:load`. The JavaScript context is
+   the same one throughout: `S.lastFilter`, `S._keys` and every closure the
+   first pass made are still alive, attached to a host that is now detached.
+
+   `cache: false` skips the event and clones anyway — the shape where our
+   listener did not run, or Turbo took its snapshot some other way. The clone
+   is returned so a scenario can inspect what was actually cached. */
+function turboLeave(win, opts) {
+  const doc = win.document;
+  if (!opts || opts.cache !== false) doc.dispatchEvent(new win.Event("turbo:before-cache"));
+  const snap = doc.body.cloneNode(true);
+  /* THE HARNESS'S OWN <script> TAGS ARE NOT PAGE CONTENT. world.js injects the
+     content scripts as inline scripts in the body; on the real page they live
+     in an isolated world and are never in the DOM, so a snapshot carrying them
+     would be carrying something GitHub's page never had. */
+  snap.querySelectorAll("script").forEach((s) => s.remove());
+  // ...and the page the reader clicked through to: a repo page, not the tab.
+  win.history.pushState({}, "", "/octo/elsewhere");
+  const away = doc.createElement("body");
+  away.innerHTML = '<div class="Layout-sidebar"><h2>About</h2></div>' +
+                   '<article class="markdown-body"><p>a readme</p></article>';
+  doc.body.replaceWith(away);
+  doc.dispatchEvent(new win.Event("turbo:render"));
+  doc.dispatchEvent(new win.Event("turbo:load"));
+  return snap;
+}
+
+/* BACK. The browser has put the URL back before Turbo renders; Turbo then
+   caches the page being left (its own before-cache) and restores the
+   snapshot. A fresh clone goes in, as Turbo's `PageSnapshot` does, so the
+   caller's `snap` stays inspectable. */
+function turboBack(win, snap, url) {
+  const doc = win.document;
+  win.history.pushState({}, "", url || "/octo?tab=repositories");
+  doc.dispatchEvent(new win.Event("turbo:before-cache"));
+  doc.body.replaceWith(snap.cloneNode(true));
+  doc.dispatchEvent(new win.Event("turbo:render"));
+  doc.dispatchEvent(new win.Event("turbo:load"));
+}
+
+/* IS THIS PAGE ALIVE, OR A PICTURE OF ONE? A restored corpse passes every
+   structural check — one host, the right shelves, the right counts — because
+   it is a faithful copy of a page that was right. The only question that tells
+   them apart is whether pressing things does anything, so this presses one of
+   each KIND of thing: the find box (an `input` listener on the host), both
+   toolbar buttons (`click`), the `c` key (a capture listener on the DOCUMENT,
+   which on a corpse still points at the detached host), a row's grip, and a
+   note (a row-level listener that writes to storage). */
+async function assertLive(ctx, w, want) {
+  const doc = w.win.document;
+  const host = doc.getElementById("shelves-host");
+  assert(ctx, host, "no host on the page at all");
+  if (!host) return;
+
+  type(w.win, want.q);
+  let v = readShelves(w.win);
+  assert(ctx, v.found === want.hits.length + " of " + want.all,
+    "the find box must filter the restored page — found reads " +
+    JSON.stringify(v.found) + ", want \"" + want.hits.length + " of " + want.all + "\"");
+  assert(ctx, v.visible.slice().sort().join() === want.hits.slice().sort().join(),
+    "and hide exactly the rows it does not match, visible: " + v.visible.join());
+  type(w.win, "");
+  v = readShelves(w.win);
+  assert(ctx, v.visible.length === want.all && !doc.querySelector("li.sh-hide"),
+    "and clearing it must bring every row back, visible " + v.visible.length +
+    " of " + want.all + ", still hidden: " + doc.querySelectorAll("li.sh-hide").length);
+
+  const btn = (label) => [...host.querySelectorAll(".sh-btn")]
+    .find((b) => b.textContent === label);
+  const shelves = () => [...doc.querySelectorAll("#shelves-host details.sh-shelf")];
+  const openOf = () => shelves().filter((d) => d.open).length + " of " + shelves().length;
+  const ex = btn("expand all");
+  const co = btn("collapse all");
+  assert(ctx, ex && co, "the toolbar's expand/collapse buttons are missing");
+  if (ex) ex.click();
+  if (co) co.click();
+  assert(ctx, shelves().length && shelves().every((d) => !d.open),
+    "COLLAPSE ALL must close every shelf on the page in front of the reader, open: " +
+    openOf());
+  if (ex) ex.click();
+  assert(ctx, shelves().length && shelves().every((d) => d.open),
+    "and EXPAND ALL open them again, open: " + openOf());
+
+  doc.body.dispatchEvent(new w.win.KeyboardEvent("keydown", { key: "c", bubbles: true }));
+  assert(ctx, shelves().every((d) => !d.open),
+    "`c` must act on THIS host — a keydown listener left on the detached one " +
+    "collapses a page nobody can see, open: " + openOf());
+  doc.body.dispatchEvent(new w.win.KeyboardEvent("keydown", { key: "e", bubbles: true }));
+
+  /* THE GRIP IS THE SHARPEST CASE. `margin()` skips a row already stamped
+     `data-sh-margin`, and the grip is only added where no `.sh-move` is held —
+     so a rebuild that trusts a cloned row's stamps keeps the CLONED grip, which
+     looks identical and answers nothing. */
+  const row = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+    .find((li) => ((li.querySelector("h3 a") || {}).textContent || "") === want.note);
+  const grip = row && row.querySelector(".sh-grip");
+  assert(ctx, grip, "the row " + want.note + " has no grip to press");
+  if (grip) {
+    grip.click();
+    assert(ctx, row.querySelectorAll(".sh-shelflist").length === 1,
+      "pressing the grip must open the shelf list, got " +
+      row.querySelectorAll(".sh-shelflist").length);
+    grip.click();   // and close it again, so the note below is not under a menu
+  }
+
+  let opened = true;
+  try {
+    writeNote(w.win, want.note, "written after back");
+  } catch (e) {
+    opened = false;
+    assert(ctx, false, "a note cannot be written on the restored page: " + e.message);
+  }
+  if (opened) {
+    await settle(200);
+    const stored = (w.store.local.notes || {})["octo/" + want.note];
+    assert(ctx, stored === "written after back",
+      "and the note must reach storage, got: " + JSON.stringify(stored));
+    assert(ctx, readShelves(w.win).notes[want.note] === "written after back",
+      "and be painted on its row, got: " +
+      JSON.stringify(readShelves(w.win).notes[want.note]));
+  }
+}
+
+/* ONE OF EACH, PER ROW. A rebuild over a stale host starts from rows that
+   already carry a margin, a grip and a sibling strip; a pass that decorates
+   without looking would hang a second set on every one of them. */
+function furniture(win) {
+  const rows = [...win.document.querySelectorAll("#shelves-host li[data-sh-name]")];
+  const most = (sel) => rows.reduce((m, li) =>
+    Math.max(m, li.querySelectorAll(sel).length), 0);
+  return {
+    rows: rows.length,
+    margin: most(".sh-margin"),
+    move: most(".sh-move"),
+    sibs: most(".sh-sibs"),
+    bars: win.document.querySelectorAll(".sh-bar").length,
+    finds: win.document.querySelectorAll(".sh-find").length,
+    status: win.document.querySelectorAll("#sh-status").length,
+  };
+}
+
+/* THE FIXTURE ALL FOUR TURBO SCENARIOS SHARE. Chipped, so the page alone is
+   the answer and nothing here waits on the ladder; two shelves plus leftovers,
+   so collapse and expand have more than one thing to act on; and a word that
+   matches two rows of four, so a live filter is distinguishable from a dead
+   one by count AND by membership. */
+const TURBO_REPOS = [
+  { name: "wire-a", chips: ["keep"], description: "the first wire" },
+  { name: "wire-b", chips: ["tools"], description: "the second wire" },
+  { name: "plain", chips: ["keep"], description: "nothing to see" },
+  { name: "loose", chips: [], description: "on no shelf at all" },
+];
+const TURBO_LIVE = { q: "wire", hits: ["wire-a", "wire-b"], all: 4, note: "plain" };
+
 /* ---------------------------------------------------------------------- */
 
 const SCENARIOS = [
@@ -382,6 +540,240 @@ const SCENARIOS = [
     const total = v.shelves.reduce((n, s) => n + s.count, 0);
     assert(ctx, total === 2, "repos duplicated across passes: " + total);
     ctx.info = v.hostCount + " host, " + total + " repos, no nesting";
+  }),
+
+  check("turbo back — snapshot restore is rebuilt live", async (ctx) => {
+    /* SHELVE, CLICK A REPO, PRESS BACK. Turbo restores the body it cloned on
+       the way out, and a clone has every element and not one listener. The
+       page looked exactly right and nothing on it answered: the find box, the
+       buttons, the keys, the grips and the notes were all a picture of the
+       page the reader left. `run()` saw `#shelves-host` and went home, and so
+       did the observer, because "a host is on the page" was the whole of the
+       idempotence check and a corpse IS a host on the page.
+
+       Two halves, asserted separately. The SNAPSHOT should be GitHub's own
+       list — what Turbo caches is a page we must later be able to shelve from
+       scratch, so it must not contain a host at all. And the RESTORED page
+       must be live, which only pressing things can show. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep", "tools"] },
+      repos: TURBO_REPOS,
+    });
+    await settle();
+    const before = readShelves(w.win);
+    assert(ctx, before, "never rendered");
+    if (!before) return;
+    const fBefore = furniture(w.win);
+    const shelvedBefore = before.shelves.reduce((n, s) => n + s.count, 0);
+    assert(ctx, shelvedBefore === 4, "four repos shelved to begin with, got " + shelvedBefore);
+
+    const snap = turboLeave(w.win);
+    await settle(300);
+
+    /* WHAT WAS CACHED. GitHub's <ul>, every row in it, nothing of ours. */
+    assert(ctx, !snap.querySelector("#shelves-host"),
+      "the cached snapshot must not contain #shelves-host — a cloned host is a " +
+      "corpse waiting to be restored");
+    const list = snap.querySelector("#user-repositories-list ul");
+    const cachedRows = list
+      ? [...list.children].filter((n) => n.tagName === "LI")
+          .map((li) => (li.querySelector("h3 a") || {}).textContent)
+      : [];
+    assert(ctx, cachedRows.join() === TURBO_REPOS.map((r) => r.name).join(),
+      "the snapshot holds GitHub's list with every row in its original order, got: " +
+      JSON.stringify(cachedRows));
+    assert(ctx, list && list.dataset.shelvesDone === undefined,
+      "and the list is not flagged consumed, or the finder will refuse it on restore");
+    assert(ctx, !snap.querySelector(".sh-hide, .sh-margin, .sh-bar, #sh-status"),
+      "and carries none of our furniture: " +
+      [...snap.querySelectorAll(".sh-hide, .sh-margin, .sh-bar, #sh-status")]
+        .map((e) => e.className || e.id).slice(0, 5).join(", "));
+
+    turboBack(w.win, snap);
+    await settle();
+
+    const v = readShelves(w.win);
+    assert(ctx, v, "nothing shelved after Back");
+    if (!v) return;
+    assert(ctx, v.hostCount === 1, "exactly one host after Back, got " + v.hostCount);
+    const shelvedAfter = v.shelves.reduce((n, s) => n + s.count, 0);
+    assert(ctx, shelvedAfter === shelvedBefore,
+      "the same " + shelvedBefore + " repos shelved after Back, got " + shelvedAfter);
+    assert(ctx, v.names.slice().sort().join() === before.names.slice().sort().join(),
+      "and the same repos, got: " + v.names.join());
+    const f = furniture(w.win);
+    assert(ctx, f.bars === 1 && f.finds === 1,
+      "one toolbar and one find box, got " + f.bars + " bars, " + f.finds + " boxes");
+    assert(ctx, f.margin === fBefore.margin && f.move === fBefore.move && f.sibs <= 1,
+      "no row carries its furniture twice: margins " + f.margin + " (was " +
+      fBefore.margin + "), grips " + f.move + " (was " + fBefore.move + "), sibling strips " + f.sibs);
+
+    await assertLive(ctx, w, TURBO_LIVE);
+    ctx.info = "snapshot: GitHub's " + cachedRows.length + " rows, no host · after Back: " +
+      v.hostCount + " live host, " + shelvedAfter + " repos";
+  }),
+
+  check("turbo back — a filter active at cache time does not hide rows",
+    async (ctx) => {
+    /* THE CLASS RIDES THE ROW. `sh-hide` is on each <li>, and a clone copies
+       it faithfully — so a page cached mid-search came back with rows missing
+       and nothing on screen explaining why, or with a find box that said one
+       thing while the rows obeyed another. Whatever the page shows after Back,
+       the box and the rows must AGREE, and clearing the box must give every
+       row back. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep", "tools"] },
+      repos: TURBO_REPOS,
+    });
+    await settle();
+    type(w.win, "wire");
+    let v = readShelves(w.win);
+    assert(ctx, v && /2 of 4/.test(v.found), "the filter applies before Back, got: " +
+      (v && v.found));
+    assert(ctx, w.win.document.querySelectorAll("li.sh-hide").length === 2,
+      "two rows hidden before Back");
+
+    const snap = turboLeave(w.win);
+    assert(ctx, !snap.querySelector(".sh-hide"),
+      "a row hidden by our filter must not be cached hidden, " +
+      snap.querySelectorAll(".sh-hide").length + " are");
+    await settle(300);
+    turboBack(w.win, snap);
+    await settle();
+
+    v = readShelves(w.win);
+    assert(ctx, v, "nothing shelved after Back");
+    if (!v) return;
+    assert(ctx, v.hostCount === 1, "exactly one host, got " + v.hostCount);
+    const hidden = w.win.document.querySelectorAll("li.sh-hide").length;
+    /* TWO HONEST ANSWERS AND ONE DISHONEST ONE. The reader's query may come
+       back with the page — the JS context kept `S.lastFilter`, exactly as a
+       GitHub dropdown does — or the page may come back unfiltered. Either is a
+       page that says what it is doing. Hidden rows beside an empty box is not. */
+    if (!v.find.value) {
+      assert(ctx, hidden === 0,
+        "the find box is empty, so no row may be hidden — " + hidden + " are");
+      assert(ctx, v.found === "", "and the found line is blank, got: " + v.found);
+    } else {
+      assert(ctx, v.find.value === "wire",
+        "a restored query is the one the reader typed, got: " + v.find.value);
+      assert(ctx, /2 of 4/.test(v.found) &&
+        v.visible.slice().sort().join() === "wire-a,wire-b",
+        "and it is applied to these rows, found " + v.found + ", visible " +
+        v.visible.join());
+    }
+
+    /* AND THE BOX MUST WORK. On a corpse, emptying it leaves the rows exactly
+       as hidden as the clone left them — which IS the reported bug. */
+    type(w.win, "");
+    v = readShelves(w.win);
+    const still = w.win.document.querySelectorAll("li.sh-hide").length;
+    assert(ctx, still === 0,
+      "an empty find box hides nothing — " + still + " rows still carry sh-hide");
+    const total = v.shelves.reduce((n, s) => n + s.count, 0);
+    assert(ctx, total === 4 && v.visible.length === 4,
+      "the counts are the full count again, shelved " + total + ", visible " +
+      v.visible.length);
+    ctx.info = "after Back: box " + JSON.stringify(readShelves(w.win).find.value) +
+      ", " + still + " hidden, " + total + " shelved";
+  }),
+
+  check("turbo back — a stale clone with no before-cache is still rebuilt",
+    async (ctx) => {
+    /* THE BELT AND THE BRACES. A snapshot can be taken without our
+       before-cache listener having had its say — a different Turbo, a
+       listener that threw, a page cached by something that is not Turbo at
+       all — and then a cloned host comes back. "A host is on the page" cannot
+       be the whole test: a host this script did not build in this context is
+       stale, and stale is rebuilt over, not trusted. The clone's rows already
+       wear our stamps and our margins, which is the trap: a rebuild that
+       believes `data-sh-margin` keeps a dead margin and a dead grip. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep", "tools"] },
+      repos: TURBO_REPOS,
+    });
+    await settle();
+    const before = readShelves(w.win);
+    assert(ctx, before, "never rendered");
+    if (!before) return;
+    const fBefore = furniture(w.win);
+
+    const snap = turboLeave(w.win, { cache: false });
+    assert(ctx, snap.querySelector("#shelves-host"),
+      "the fixture must cache a host for this scenario to mean anything");
+    await settle(300);
+    /* No before-cache on the way back either: the whole round trip happens
+       without our listener. */
+    w.win.history.pushState({}, "", "/octo?tab=repositories");
+    w.win.document.body.replaceWith(snap.cloneNode(true));
+    w.win.document.dispatchEvent(new w.win.Event("turbo:render"));
+    await settle();
+
+    const v = readShelves(w.win);
+    assert(ctx, v, "nothing shelved after Back");
+    if (!v) return;
+    assert(ctx, v.hostCount === 1, "exactly one host, got " + v.hostCount);
+    assert(ctx, !v.nested, "the rebuild must not nest a host inside the stale one");
+    const total = v.shelves.reduce((n, s) => n + s.count, 0);
+    assert(ctx, total === 4, "every repo still shelved, got " + total);
+    assert(ctx, v.names.slice().sort().join() === before.names.slice().sort().join(),
+      "and no row lost or duplicated, got: " + v.names.join());
+    const f = furniture(w.win);
+    assert(ctx, f.rows === 4, "four rows in the host, got " + f.rows);
+    assert(ctx, f.bars === 1 && f.finds === 1 && f.status === 0,
+      "one toolbar, one find box, no leftover status line, got " + f.bars +
+      " bars, " + f.finds + " boxes, " + f.status + " status");
+    assert(ctx, f.margin === fBefore.margin && f.move === fBefore.move && f.sibs <= 1,
+      "no row carries its furniture twice: margins " + f.margin + ", grips " +
+      f.move + ", sibling strips " + f.sibs);
+
+    await assertLive(ctx, w, TURBO_LIVE);
+    ctx.info = "after a Back with no before-cache: " + v.hostCount + " host, " + total +
+      " repos, " + f.margin + " margin per row";
+  }),
+
+  check("turbo back — merged pages are not shelved twice", async (ctx) => {
+    /* PAGE TWO IS FETCHED, NOT RENDERED. Its rows were merged into the host
+       and GitHub's pager hidden; a snapshot that put them back into page one's
+       <ul> and un-hid the pager would hand the rebuild page two TWICE — once
+       as rows on the list, once again from `fetchRestOfPages`. A repository
+       on two shelves, or one shelf counting it twice, is the failure. */
+    const w = build({
+      owner: "octo",
+      settings: { groups: ["keep"], fetchAllPages: true },
+      repos: [{ name: "one", chips: ["keep"] }, { name: "two", chips: [] }],
+      page2: [{ name: "three", chips: ["keep"] }],
+    });
+    await settle();
+    const before = readShelves(w.win);
+    assert(ctx, before, "never rendered");
+    if (!before) return;
+    assert(ctx, before.names.length === 3, "three rows across two pages, got " +
+      before.names.join());
+
+    const snap = turboLeave(w.win);
+    assert(ctx, !snap.querySelector("#shelves-host"), "the snapshot holds no host");
+    await settle(300);
+    turboBack(w.win, snap);
+    await settle();
+
+    const v = readShelves(w.win);
+    assert(ctx, v, "nothing shelved after Back");
+    if (!v) return;
+    assert(ctx, v.hostCount === 1, "exactly one host, got " + v.hostCount);
+    const names = v.names.slice().sort();
+    assert(ctx, names.join() === "octo/one,octo/three,octo/two",
+      "each repo exactly once after Back, got: " + names.join());
+    const total = v.shelves.reduce((n, s) => n + s.count, 0);
+    assert(ctx, total === 3, "counts sum to 3, got " + total);
+    const pager = w.win.document.querySelector(".paginate-container");
+    assert(ctx, pager && pager.style.display === "none",
+      "and the pager is hidden again, since page two is merged again");
+    ctx.info = "after Back: " + names.length + " rows, " + total + " shelved, " +
+      w.counters.pages.length + " page-2 fetches";
   }),
 
   check("cache — a warm cache costs zero repo-page fetches", async (ctx) => {
