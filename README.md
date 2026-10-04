@@ -489,7 +489,10 @@ extension's business. The only claim being made is *these few first*, so
 everything else stays exactly where GitHub put it. Pinning a repo puts it
 **below** the ones already pinned, so pinning three in a row does not reverse
 them, and unpinning drops a row back under the pinned ones rather than to the
-bottom of the shelf.
+bottom of the shelf. The pinned block is kept in the order you pinned it, and
+that order is the same everywhere: on the first paint, after the second pass
+re-shelves a row, and when a pinned repo is moved to another shelf, where it
+joins that shelf's pinned rows by when it was pinned.
 
 Pins live in this browser against `owner/name`, like your notes and your
 overrides, and like them *rescan* and *clear topic cache* leave them strictly

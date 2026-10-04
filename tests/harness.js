@@ -3493,6 +3493,168 @@ const SCENARIOS = [
     ctx.info = "pinned rows first, in the order they were pinned";
   }),
 
+  check("pins - the first paint keeps pin order, not GitHub's source order",
+    async (ctx) => {
+    /* THE SCENARIO ABOVE COULD NOT SEE THIS. Its reload check re-buckets rows
+       the render had ALREADY stamped with `data-sh-name`, and the bug lived in
+       exactly that stamp: `bucket()` sorted the pinned block by
+       `li.dataset.shName`, which `render()` writes only after `bucket()` has
+       returned. So on the first paint every stamp read as 0 and the pinned
+       rows came out in GitHub's order. A cold run (chipped topics, no API)
+       has no second pass to paper over it, so what is drawn after settle IS
+       the first paint. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      pins: { "octo/gamma": 1, "octo/alpha": 2 },
+      repos: [
+        { name: "alpha", topics: ["keep"], private: true },
+        { name: "beta",  topics: ["keep"], private: true },
+        { name: "gamma", topics: ["keep"], private: true },
+      ],
+    });
+    await settle(1600);
+    const doc = w.win.document;
+    const order = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .map((x) => x.dataset.shName.split("/")[1]).join();
+    assert(ctx, order === "gamma,alpha,beta",
+      "gamma was pinned first, so it is drawn first, got: " + order);
+
+    /* AND STRAIGHT FROM `bucket()` ON UNSTAMPED ROWS, which is the input the
+       first paint actually gives it. A legacy `true` predates every stamp and
+       sorts first; unpinned rows keep their source order after the block —
+       and a shelf whose rows are ALL pinned is still sorted, not skipped. */
+    const mk = () => doc.createElement("li");
+    const run = (names, pins) => {
+      const rows = names.map(mk);
+      const tag = new Map(rows.map((li, i) => [li, names[i]]));
+      const out = w.win.Shelves.bucket(rows, names.map(() => ["keep"]),
+        { groups: ["keep"], otherLabel: "Ungrouped" }, names, {}, [], { pins });
+      return (out.buckets.get("keep") || []).map((li) => tag.get(li)).join();
+    };
+    const mixed = run(["u1", "p5", "u2", "legacy", "p3", "u3"],
+      { p5: 5, legacy: true, p3: 3 });
+    assert(ctx, mixed === "legacy,p3,p5,u1,u2,u3",
+      "legacy first, then by stamp, then the unpinned in source order, got: " + mixed);
+    const all = run(["a", "b", "c"], { a: 3, b: true, c: 1 });
+    assert(ctx, all === "b,c,a",
+      "a shelf that is all pins is still in pin order, got: " + all);
+
+    ctx.info = "first paint " + order + "; mixed " + mixed;
+  }),
+
+  check("pins - a pinned row that changes shelf in the second pass lands in the pinned block",
+    async (ctx) => {
+    /* REBUCKET HONOURED THE SHELF AND DROPPED THE ORDER. Phase two moved a row
+       only `if (li.parentElement !== ul)`, and moved it with `appendChild` —
+       so a pinned repo whose shelf was only known once the ladder answered
+       (a rule shelf on `lang:`, or here a private repo whose topics need the
+       repo-page rung) arrived at the very bottom, under every unpinned row.
+       Rung 4 is slowed so the two passes are two passes. */
+    const at = Date.now();
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep"] },
+      apiRepos: [],
+      pins: { "octo/slow-p": 1, "octo/known-b": 2 },
+      cache: {
+        "octo/known-a": { at, topics: ["keep"], name: "octo/known-a", via: "page" },
+        "octo/known-b": { at, topics: ["keep"], name: "octo/known-b", via: "page" },
+      },
+      repos: [
+        { name: "known-a", topics: ["keep"], private: true },
+        { name: "known-b", topics: ["keep"], private: true },
+        { name: "slow-p", topics: ["keep"], private: true },
+      ],
+    });
+    const real = w.win.fetch;
+    w.win.fetch = (u) => new Promise((r) => setTimeout(() => r(real(u)), 700));
+    const doc = w.win.document;
+    const keep = () => {
+      const d = [...doc.querySelectorAll("details.sh-shelf")].find(
+        (x) => (x.querySelector(".sh-name") || {}).textContent === "keep");
+      return d ? [...d.querySelectorAll("li[data-sh-name]")]
+        .map((x) => x.dataset.shName.split("/")[1]).join() : "";
+    };
+
+    await settle(450);
+    const host = doc.getElementById("shelves-host");
+    assert(ctx, host && host.dataset.provisional === "1",
+      "the first frame must be a guess, or this is not testing the second pass");
+    const first = keep();
+    assert(ctx, first === "known-b,known-a",
+      "the guess shelves only the cached two, got: " + first);
+
+    await settle(2600);
+    assert(ctx, host.dataset.provisional === undefined, "and the answer arrives");
+    const final = keep();
+    assert(ctx, final === "slow-p,known-b,known-a",
+      "slow-p was pinned first, so it goes on top of its new shelf, got: " + final);
+    ctx.info = "guess " + first + " -> answer " + final;
+  }),
+
+  check("pins - moving a pinned row to another shelf files it in that shelf's pinned block",
+    async (ctx) => {
+    /* `moveRow` APPENDED, so a pinned repo moved by hand sat at the bottom of
+       its new shelf until the next load put it back on top. It now goes where
+       `bucket()` would have put it: among the target's pins, by pin time. */
+    const w = build({
+      viewer: "octo", owner: "octo",
+      settings: { groups: ["keep", "other"] },
+      apiRepos: [],
+      pins: { "octo/o1": 1, "octo/mover": 2, "octo/o3": 3 },
+      repos: [
+        { name: "k1", topics: ["keep"], private: true },
+        { name: "mover", topics: ["keep"], private: true },
+        { name: "o1", topics: ["other"], private: true },
+        { name: "o2", topics: ["other"], private: true },
+        { name: "o3", topics: ["other"], private: true },
+      ],
+    });
+    await settle(1600);
+    const doc = w.win.document;
+    const shelf = (label) => {
+      const d = [...doc.querySelectorAll("details.sh-shelf")].find(
+        (x) => (x.querySelector(".sh-name") || {}).textContent === label);
+      return d ? [...d.querySelectorAll("li[data-sh-name]")]
+        .map((x) => x.dataset.shName.split("/")[1]).join() : "";
+    };
+    assert(ctx, shelf("other") === "o1,o3,o2",
+      "the target starts pins-first in pin order, got: " + shelf("other"));
+
+    const li = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .find((x) => x.dataset.shName === "octo/mover");
+    if (!li) return assert(ctx, false, "no row for mover");
+    li.querySelector(".sh-grip").click();
+    const pick = [...li.querySelectorAll(".sh-shelfpick")]
+      .find((x) => x.textContent === "other");
+    assert(ctx, pick, "the menu offers `other`");
+    if (!pick) return;
+    pick.click();
+    await settle(400);
+    const got = shelf("other");
+    assert(ctx, got === "o1,mover,o3,o2",
+      "pinned between o1 (t=1) and o3 (t=3), above the unpinned o2, got: " + got);
+
+    /* AND A PIN MADE THIS SESSION IS THE NEWEST, so it files after every
+       older pin when moved — `repin` stamps the row with the time. */
+    const k1 = [...doc.querySelectorAll("#shelves-host li[data-sh-name]")]
+      .find((x) => x.dataset.shName === "octo/k1");
+    k1.querySelector(".sh-grip").click();
+    k1.querySelector(".sh-pinpick").click();
+    await settle(400);
+    k1.querySelector(".sh-grip").click();
+    const to = [...k1.querySelectorAll(".sh-shelfpick")]
+      .find((x) => x.textContent === "other");
+    if (to) to.click();
+    await settle(400);
+    const after = shelf("other");
+    assert(ctx, after === "o1,mover,o3,k1,o2",
+      "a fresh pin files after the older ones, got: " + after);
+    ctx.info = "moved into " + got + "; then " + after;
+  }),
+
   check("backup - the three things nothing can rebuild can get out, and back in",
     async (ctx) => {
     /* The fact cache is derived and a rescan re-earns it; `groups` is a few

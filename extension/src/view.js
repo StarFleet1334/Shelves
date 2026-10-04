@@ -82,6 +82,14 @@ globalThis.Shelves = globalThis.Shelves || {};
       .map((sp) => sp.label);
   };
 
+  /** A pin's sort key. A legacy `true` (or anything else that is not a
+   *  number) is 0, because it was pinned before stamps existed and so before
+   *  every pin that carries one. One definition, so `bucket` and `moveRow`
+   *  cannot disagree about where a pinned row goes. */
+  S.pinAt = function pinAt(v) {
+    return typeof v === "number" ? v : 0;
+  };
+
   S.bucket = function bucket(rows, topics, settings, names, overrides, facts, opts) {
     const ov = overrides || {};
     const who = names || [];
@@ -96,11 +104,21 @@ globalThis.Shelves = globalThis.Shelves || {};
      * Counted here, stated on the header. */
     const unjudged = new Map();
     const pinned = (opts && opts.pins) || {};
+    /* ── THE ROW'S NAME, AS THIS FUNCTION KNOWS IT ──────────────────────────
+     * Keyed by the element, filled from `who[i]` in the loop below, and the
+     * ONLY place the pin partition further down may learn whose row it holds.
+     * See the note there for why `li.dataset.shName` is not that place. */
+    const nameOf = new Map();
     rows.forEach((li, i) => {
       const key = S.bucketFor(topics[i] || [], settings, ov[who[i]], fs[i], specs);
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push(li);
+      nameOf.set(li, who[i] || "");
       li.dataset.shPin = pinned[who[i]] ? "1" : "";
+      /* AND WHEN, on the row itself, for the one reader that has no `pins` to
+       * consult: `moveRow`, which re-homes a pinned row into another shelf's
+       * pinned block and must put it where this partition would have. */
+      li.dataset.shPinAt = pinned[who[i]] ? String(S.pinAt(pinned[who[i]])) : "";
       /* ── WHERE THIS ROW WOULD GO WITH NO OPINION AT ALL ──────────────────
        * An override outranks every topic and is exempt from `cache.clear()`
        * (store.js) — both deliberate, and together they have one trap in
@@ -176,21 +194,36 @@ globalThis.Shelves = globalThis.Shelves || {};
      * a sort: GitHub's own order inside a shelf is the reader's `Sort` setting
      * and is not ours to rearrange — the only claim being made here is "these
      * few first". */
+    const isPinned = (li) => !!pinned[nameOf.get(li)];
     buckets.forEach((list, label) => {
-      const up = list.filter((li) => li.dataset.shPin === "1");
-      if (!up.length || up.length === list.length) return;
+      const up = list.filter(isPinned);
+      /* NOT skipped when EVERY row is pinned. That was a shortcut for "nothing
+       * would move", true of the partition and false of the sort beneath it:
+       * a shelf whose repos are all pinned still owes them pin order. */
+      if (!up.length) return;
       /* IN THE ORDER THEY WERE PINNED, which is the order the reader watched
        * them rise in. Sorting the pinned block by GitHub's source order
        * instead meant the page rearranged itself on the next load: pin `c`
        * then `a` and the session showed `c,a` while the reload showed `a,c`.
        * The store keeps a stamp per pin for exactly this; a legacy `true`
-       * sorts first, since it was pinned before any of them. */
-      const at = (li) => {
-        const v = pinned[li.dataset.shName];
-        return typeof v === "number" ? v : 0;
-      };
+       * sorts first, since it was pinned before any of them.
+       *
+       * ── AND THE NAME COMES FROM `who[i]`, NEVER FROM `li.dataset.shName` ──
+       * That stamp is written by `S.render`, in its row loop, AFTER it has
+       * called this function — so on the first paint every row's `shName` was
+       * still unset, every stamp read as 0, the sort was a no-op, and the
+       * pinned block came out in GitHub's source order: pin `gamma` then
+       * `alpha` and the first bucket said `alpha, gamma`. On a cold run there
+       * is no second pass, so the page was wrong for the whole visit; on a warm
+       * one `rebucket` (which runs after the stamp) visibly reshuffled it. The
+       * test that should have caught it re-bucketed rows the render had
+       * already stamped, which is the one input that hides the bug. So this
+       * function reads only what it was handed — the `nameOf` map built from
+       * `names` above — and the shPin filter goes through the same map, so the
+       * set that rises and the order it rises in cannot disagree. */
+      const at = (li) => S.pinAt(pinned[nameOf.get(li)]);
       up.sort((a, b) => at(a) - at(b));
-      buckets.set(label, up.concat(list.filter((li) => li.dataset.shPin !== "1")));
+      buckets.set(label, up.concat(list.filter((li) => !isPinned(li))));
     });
 
     return { buckets, order, specs, unjudged };
@@ -395,7 +428,21 @@ globalThis.Shelves = globalThis.Shelves || {};
     const from = li.closest("details.sh-shelf");
     const ul = shelf.querySelector("ul");
     if (!ul || from === shelf) return false;
-    ul.appendChild(li);
+    /* ── A PINNED ROW KEEPS ITS PLACE IN THE PINNED BLOCK ──────────────────
+     * `appendChild` alone dropped a pinned repo at the very bottom of its new
+     * shelf, under every unpinned row, until the next load put it back on
+     * top — the move contradicted the pin it was carrying. It goes where
+     * `bucket()` would put it: among the target's pinned rows, by the time it
+     * was pinned (`data-sh-pin-at`, stamped there and by `repin`), and ahead
+     * of every unpinned one. An unpinned row still goes to the bottom. */
+    if (li.dataset.shPin === "1") {
+      const mine = Number(li.dataset.shPinAt) || 0;
+      const before = [...ul.children].find((x) => x !== li &&
+        (x.dataset.shPin !== "1" || (Number(x.dataset.shPinAt) || 0) > mine));
+      ul.insertBefore(li, before || null);
+    } else {
+      ul.appendChild(li);
+    }
     shelf.open = true;
     [from, shelf].forEach((d) => {
       if (!d) return;
@@ -423,6 +470,9 @@ globalThis.Shelves = globalThis.Shelves || {};
    *  page catching up, exactly as `moveRow` is for a move. */
   S.repin = function repin(host, li, on) {
     li.dataset.shPin = on ? "1" : "";
+    /* Now, which is what `pins.toggle` stamps too (store.js) — the newest pin
+     * there is, so a later `moveRow` files it after every older one. */
+    li.dataset.shPinAt = on ? String(Date.now()) : "";
     const ul = li.parentElement;
     if (!ul) return false;
     if (on) {
@@ -1706,11 +1756,26 @@ globalThis.Shelves = globalThis.Shelves || {};
           host.appendChild(d);
         }
         const ul = d.querySelector("ul");
-        (buckets.get(label) || []).forEach((li) => {
-          /* MOVED ONLY IF IT HAS TO BE. `appendChild` on a row already in this
-           * list would still detach and re-attach it — which is the expensive,
-           * risky half — for no change at all. */
-          if (li.parentElement !== ul) ul.appendChild(li);
+        (buckets.get(label) || []).forEach((li, k) => {
+          /* MOVED ONLY IF IT HAS TO BE. Re-inserting a row already in its
+           * place would still detach and re-attach it — which is the
+           * expensive, risky half — for no change at all.
+           *
+           * ── BUT "IN THIS LIST" IS NOT "IN ITS PLACE" ──────────────────────
+           * This used to be `if (li.parentElement !== ul) ul.appendChild(li)`,
+           * which honoured the computed shelf and threw away the computed
+           * ORDER: a row that changed shelf in this pass landed at the bottom,
+           * pinned or not. The realistic case is a rule shelf — `java =
+           * lang:java` — where phase one's chip facts carry no language, so a
+           * pinned Java repo starts in Ungrouped and the finished answer
+           * dropped it under every unpinned row of `java`. So each row goes to
+           * index `k` of the bucket, and only when something else is there.
+           * Index-safe because this <ul> holds nothing but rows (`buildShelf`
+           * appends rows and only rows); a row still waiting to leave for a
+           * later shelf is merely pushed down, and leaves when its turn
+           * comes. */
+          const at = ul.children[k];
+          if (at !== li) ul.insertBefore(li, at || null);
         });
       });
 
