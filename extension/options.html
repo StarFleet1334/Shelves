@@ -78,6 +78,9 @@
         margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line);
       }
       #saved { color: var(--muted); font-size: 12px; }
+      /* A REFUSAL IS NOT A FOOTNOTE: it means the edit exists only on this
+       * screen. --warn is the page's existing caution colour, light and dark. */
+      #saved[data-state="error"] { color: var(--warn); font-weight: 600; }
       details.tok summary { cursor: pointer; color: var(--accent); font-size: 12px; }
       .box {
         border: 1px solid var(--line); border-radius: 6px;

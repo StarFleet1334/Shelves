@@ -71,19 +71,84 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
   }
 
-  function set(area, obj) {
+  /* ---- the write that can say WHY it failed ------------------------------
+   * `set` answered a boolean, and a boolean is enough for every content-script
+   * writer here: a lost cache write costs a refetch, and there is nobody
+   * looking at the page to tell. THE OPTIONS PAGE IS THE ONE WRITER WITH A
+   * READER IN FRONT OF IT, and the thing it writes — the shelf list — is the
+   * only setting typed by hand. chrome.storage.sync refuses writes for
+   * reasons the reader can act on (an item over 8,192 bytes, more than 120
+   * writes a minute), so "it failed" is not enough; it has to be "it failed,
+   * and this is what to change". `issue` keeps the lastError message, `write`
+   * hands it over, and `set` is `write` reduced back to the boolean every
+   * existing caller expects — resolved in the SAME callback tick as before,
+   * so no caller's timing moves. */
+  function issue(area, obj, done) {
     const st = api();
-    if (!st || !st[area]) return Promise.resolve(false);
+    if (!st || !st[area]) {
+      done({ ok: false, error: "chrome.storage." + area + " is not available here" });
+      return;
+    }
+    try {
+      st[area].set(obj, () => {
+        // chrome.runtime.lastError must be READ or Chrome logs it as unchecked.
+        const err = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError;
+        if (err) done({ ok: false, error: String((err && err.message) || err) });
+        else done({ ok: true, error: null });
+      });
+    } catch (e) {
+      done({ ok: false, error: String((e && e.message) || e) });
+    }
+  }
+
+  function write(area, obj) {
+    return new Promise((resolve) => issue(area, obj, resolve));
+  }
+
+  function set(area, obj) {
+    return new Promise((resolve) => issue(area, obj, (r) => resolve(r.ok)));
+  }
+
+  /* `get`, but with the failure kept instead of folded into defaults. Folding
+   * is right for a content script (P.III: a missing input costs grouping,
+   * never the page) and WRONG for the options page: defaults shown in place
+   * of an unreadable store are exactly what a Save would then write over the
+   * reader's real settings. */
+  function read(area, defaults) {
+    const st = api();
+    if (!st || !st[area]) {
+      return Promise.resolve({ ok: false, value: { ...defaults },
+                               error: "chrome.storage." + area + " is not available here" });
+    }
     return new Promise((resolve) => {
       try {
-        st[area].set(obj, () => {
+        st[area].get(defaults, (got) => {
           const err = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.lastError;
-          resolve(!err);
+          if (err) resolve({ ok: false, value: { ...defaults }, error: String((err && err.message) || err) });
+          else resolve({ ok: true, value: { ...defaults, ...(got || {}) }, error: null });
         });
       } catch (e) {
-        resolve(false);
+        resolve({ ok: false, value: { ...defaults }, error: String((e && e.message) || e) });
       }
     });
+  }
+
+  /* HOW BIG CHROME THINKS A SYNC ITEM IS: the key plus the UTF-8 bytes of the
+   * value's JSON. Measured BEFORE writing, so a shelf list over the per-item
+   * quota is refused here with its size on screen instead of costing one of
+   * the 120 writes a minute to learn the same thing from Chrome. */
+  const SYNC_LIMITS = {
+    QUOTA_BYTES: 102400,
+    QUOTA_BYTES_PER_ITEM: 8192,
+    MAX_WRITE_OPERATIONS_PER_MINUTE: 120,
+    MAX_WRITE_OPERATIONS_PER_HOUR: 1800,
+  };
+  function syncBytes(key, value) {
+    const json = JSON.stringify(value === undefined ? null : value);
+    let n;
+    if (typeof TextEncoder === "function") n = new TextEncoder().encode(json).length;
+    else n = unescape(encodeURIComponent(json)).length;
+    return String(key).length + n;
   }
 
   /* ---- one writer at a time, across every github.com tab -----------------
@@ -160,6 +225,12 @@ globalThis.Shelves = globalThis.Shelves || {};
   };
 
   S.saveSettings = (patch) => set("sync", patch);
+  /** @returns {Promise<{ok: boolean, error: string|null}>} — `set` with its reason. */
+  S.write = (area, obj) => write(area, obj);
+  /** @returns {Promise<{ok: boolean, value: object, error: string|null}>} */
+  S.read = (area, defaults) => read(area, defaults || {});
+  S.SYNC_LIMITS = SYNC_LIMITS;
+  S.syncBytes = syncBytes;
   S.saveToken = (token) => set("local", { token: String(token || "").trim() });
 
   /* ---- the fact cache -------------------------------------------------- */

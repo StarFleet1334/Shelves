@@ -438,7 +438,10 @@ topics, stars or anything else on the page — nothing can rebuild one if it is
 lost. So *rescan* and *clear cache* both leave them strictly alone, which the
 charter states as the single exception to principle I.
 
-Press **Save**. The GitHub tab reloads itself.
+Press **Save**. The GitHub tab reloads itself. If Chrome refuses the write —
+the whole shelf list is one synced item capped at 8,192 bytes, and sync allows
+120 writes a minute — the page says **Not saved** and why, and keeps what you
+typed on screen instead of claiming it was saved.
 
 ### Put a repo on a shelf yourself
 

@@ -13,6 +13,8 @@
 
 const { build, makeLocks, readShelves, settle, type, writeNote, openVocab, pickTerm,
         pickGap, readMark, profilePage } = require("./world");
+/* The options page has a world of its own: options.html, not a GitHub tab. */
+const OW = require("./options-world");
 
 let failures = 0;
 const results = [];
@@ -6013,6 +6015,226 @@ const SCENARIOS = [
     assert(ctx, typeof map === "object", "and the map is still a map");
 
     ctx.info = "7 strangers written, newest 5 kept, oldest 2 evicted, own profile untouched";
+  }),
+  /* ---- THE OPTIONS PAGE --------------------------------------------------
+     The one page where the reader types something by hand, and until these
+     scenarios the one page with no test at all. Its Save said "Saved" from
+     inside the chrome.storage.sync.set callback without reading
+     chrome.runtime.lastError — so a write Chrome REFUSED (the whole shelf list
+     is one 8,192-byte item; 120 writes a minute against a page that binds
+     Ctrl+S) told the reader it had kept what it had just thrown away. The
+     world is tests/options-world.js: options.html and the scripts it names,
+     against a chrome.storage that can say no. */
+
+  check("options - a full save says Saved, in the ok state, and keeps what was typed",
+    async (ctx) => {
+    const w = OW.build({ sync: { groups: ["keep"] }, local: { token: "" } });
+    await OW.wait(30);
+    OW.addShelves(w, ["tooling", "games"]);
+    OW.setToken(w, "  github_pat_abc  ");
+    OW.click(w, "#save");
+    await OW.wait(60);
+    const s = OW.status(w);
+    assert(ctx, s.text === "Saved", "the status reads exactly `Saved`, got " + JSON.stringify(s.text));
+    assert(ctx, s.state === "ok", "in the ok state, got data-state=" + JSON.stringify(s.state));
+    assert(ctx, JSON.stringify(w.sync.data.groups) === JSON.stringify(["keep", "tooling", "games"]),
+      "sync holds the three shelves in order, got " + JSON.stringify(w.sync.data.groups));
+    assert(ctx, w.local.data.token === "github_pat_abc",
+      "the token went to LOCAL, trimmed, got " + JSON.stringify(w.local.data.token));
+    assert(ctx, !("token" in w.sync.data), "and never to sync (P.II)");
+    ctx.info = "Saved/ok; sync groups " + w.sync.data.groups.join(",") + "; token in local";
+  }),
+
+  check("options - a refused write never says Saved, keeps the shelves, and stays on screen",
+    async (ctx) => {
+    /* THE REGRESSION. Chrome refuses the sync write with a per-item quota;
+       the old page flashed "Saved" anyway and then redrew the editor from the
+       list it had just failed to keep. */
+    const w = OW.build({ sync: { groups: ["keep"] }, local: { token: "old" } });
+    await OW.wait(30);
+    OW.addShelves(w, ["tooling", "games"]);
+    OW.setToken(w, "new-token");
+    w.sync.failNext("set", OW.QUOTA_MSG);
+    OW.click(w, "#save");
+    await OW.wait(60);
+    const s = OW.status(w);
+    assert(ctx, w.said.indexOf("Saved") === -1,
+      "`Saved` must never appear for a write Chrome refused, the line showed: " +
+      JSON.stringify(w.said));
+    assert(ctx, s.state === "error", "the error state, got data-state=" + JSON.stringify(s.state));
+    assert(ctx, /^Not saved/.test(s.text), "the text starts `Not saved`, got " + JSON.stringify(s.text));
+    assert(ctx, /too long for Chrome sync/.test(s.text),
+      "and names the per-item quota in words, got " + JSON.stringify(s.text));
+    assert(ctx, OW.localWrites(w).length === 0,
+      "the token write is not attempted after the settings failed, got " +
+      JSON.stringify(OW.localWrites(w)));
+    assert(ctx, w.local.data.token === "old", "so the stored token is untouched");
+    assert(ctx, JSON.stringify(OW.shelves(w)) === JSON.stringify(["keep", "tooling", "games"]),
+      "the shelves the reader typed are still in the editor, got " + JSON.stringify(OW.shelves(w)));
+    assert(ctx, w.runtime.unchecked.length === 0,
+      "chrome.runtime.lastError was read inside the callback, unchecked: " +
+      JSON.stringify(w.runtime.unchecked));
+    /* A FAILURE IS NOT A TOAST. "Saved" fades after 2 s; this must not. */
+    await OW.wait(2200);
+    const later = OW.status(w);
+    assert(ctx, later.text === s.text && later.state === "error",
+      "still on screen after 2.2 s, got " + JSON.stringify(later));
+    ctx.info = JSON.stringify(s.text) + " — " + (later.text === s.text ? "still there" : "gone") +
+      " at 2.2 s, token " + (OW.localWrites(w).length ? "written anyway" : "untried");
+  }),
+
+  check("options - each Chrome refusal is named in words: write rate, sync full, anything else",
+    async (ctx) => {
+    const cases = [
+      { err: "This request exceeds the MAX_WRITE_OPERATIONS_PER_MINUTE quota.",
+        want: (t) => /^Not saved/.test(t) && /too many saves/.test(t), what: "too many saves" },
+      { err: "QUOTA_BYTES quota exceeded",
+        want: (t) => /^Not saved/.test(t) && /Chrome sync is full/.test(t), what: "Chrome sync is full" },
+      { err: "IO error: .../Sync Extension Settings/000003.ldb: FILE_ERROR_NO_SPACE",
+        want: (t) => t === "Not saved — IO error: .../Sync Extension Settings/000003.ldb: FILE_ERROR_NO_SPACE",
+        what: "`Not saved — ` + the raw message" },
+    ];
+    const told = [];
+    for (const c of cases) {
+      const w = OW.build({ sync: { groups: ["keep"] } });
+      await OW.wait(30);
+      w.sync.failNext("set", c.err);
+      OW.ctrlS(w);                          // the shortcut, not only the button
+      await OW.wait(60);
+      const s = OW.status(w);
+      assert(ctx, c.want(s.text) && s.state === "error",
+        JSON.stringify(c.err) + " should read " + c.what + " in the error state, got " +
+        JSON.stringify(s));
+      assert(ctx, w.said.indexOf("Saved") === -1,
+        JSON.stringify(c.err) + " must never show `Saved`, showed " + JSON.stringify(w.said));
+      told.push(s.text);
+    }
+    ctx.info = told.join(" · ");
+  }),
+
+  check("options - an over-long shelf list is measured in UTF-8 bytes and never sent",
+    async (ctx) => {
+    /* 60 shelves of 70 Cyrillic letters: about 4,400 JS characters but over
+       8,400 UTF-8 bytes. A pre-check that measured `.length` would pass this
+       and spend a write from the per-minute budget to be refused. */
+    const names = [];
+    for (let i = 0; i < 60; i++) names.push("шкаф" + String(i).padStart(2, "0") + "я".repeat(64));
+    const bytes = OW.itemBytes("groups", names);
+    const chars = JSON.stringify(names).length + "groups".length;
+    if (!(bytes > OW.PER_ITEM && chars <= OW.PER_ITEM)) {
+      ctx.bad.push("fixture: want chars ≤ 8192 < bytes, got " + chars + " / " + bytes);
+      return;
+    }
+    const w = OW.build({ sync: { groups: [] } });
+    await OW.wait(30);
+    OW.addShelves(w, names);
+    OW.click(w, "#save");
+    await OW.wait(60);
+    const s = OW.status(w);
+    assert(ctx, OW.syncSets(w).length === 0,
+      "storage.sync.set is not called at all for a list that cannot fit, got " +
+      OW.syncSets(w).length + " call(s)");
+    assert(ctx, OW.localWrites(w).length === 0, "nor the token write after it");
+    assert(ctx, s.state === "error" && /^Not saved/.test(s.text) && /too long for Chrome sync/.test(s.text),
+      "the quota sentence in the error state, got " + JSON.stringify(s));
+    const plain = String(bytes);
+    const commas = plain.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    assert(ctx, s.text.includes(plain) || s.text.includes(commas),
+      "and the size it measured (" + commas + " bytes), got " + JSON.stringify(s.text));
+    assert(ctx, OW.shelves(w).length === 60, "all 60 shelves still in the editor, got " +
+      OW.shelves(w).length);
+
+    /* AND NOT OVER-EAGER: a list a few bytes under the line is sent. */
+    const fit = [];
+    let i = 0;
+    while (OW.itemBytes("groups", fit.concat(["s" + String(i).padStart(4, "0") + "x".repeat(40)])) <= OW.PER_ITEM - 10) {
+      fit.push("s" + String(i).padStart(4, "0") + "x".repeat(40));
+      i++;
+    }
+    const w2 = OW.build({ sync: { groups: fit } });
+    await OW.wait(30);
+    OW.click(w2, "#save");
+    await OW.wait(60);
+    const s2 = OW.status(w2);
+    assert(ctx, OW.syncSets(w2).length === 1 && s2.text === "Saved",
+      "a " + OW.itemBytes("groups", fit) + "-byte list is sent and Saved, got " +
+      OW.syncSets(w2).length + " set(s), " + JSON.stringify(s2));
+    ctx.info = bytes + " bytes (" + chars + " chars) refused unsent; " +
+      OW.itemBytes("groups", fit) + " bytes sent";
+  }),
+
+  check("options - settings saved but the token refused is said as exactly that",
+    async (ctx) => {
+    const w = OW.build({ sync: { groups: [] }, local: { token: "old" } });
+    await OW.wait(30);
+    OW.addShelves(w, ["tooling"]);
+    OW.setToken(w, "new-token");
+    w.local.failNext("set", "IO error: local store is read-only");
+    OW.click(w, "#save");
+    await OW.wait(60);
+    const s = OW.status(w);
+    assert(ctx, JSON.stringify(w.sync.data.groups) === JSON.stringify(["tooling"]),
+      "the settings half landed, got " + JSON.stringify(w.sync.data.groups));
+    assert(ctx, /^Settings saved, but the token was not/.test(s.text) && s.state === "error",
+      "the partial outcome is named as one, in the error state, got " + JSON.stringify(s));
+    assert(ctx, w.said.indexOf("Saved") === -1, "and plain `Saved` never shows, showed " +
+      JSON.stringify(w.said));
+    assert(ctx, w.local.data.token === "old", "the stored token is the old one");
+    ctx.info = JSON.stringify(s.text);
+  }),
+
+  check("options - a failed cache clear says so instead of saying it cleared",
+    async (ctx) => {
+    const w = OW.build({ local: { topicCache: { a: 1 }, repoFacts: { b: 2 }, notes: { c: "mine" } } });
+    await OW.wait(30);
+    w.local.failNext("set", "IO error: disk full");
+    OW.click(w, "#clear");
+    await OW.wait(60);
+    const s = OW.status(w);
+    assert(ctx, /^Could not clear the cache —/.test(s.text) && s.state === "error",
+      "the failure is named in the error state, got " + JSON.stringify(s));
+    assert(ctx, !w.said.some((t) => /cleared/.test(t)),
+      "`cleared` never shows for a clear that failed, showed " + JSON.stringify(w.said));
+    assert(ctx, w.local.data.notes && w.local.data.notes.c === "mine", "notes untouched either way");
+    ctx.info = JSON.stringify(s.text);
+  }),
+
+  check("options - settings that cannot be read are not shown as if they were",
+    async (ctx) => {
+    const w = OW.build({
+      sync: { groups: ["keep", "tooling"] },
+      arm: (x) => x.sync.failAlways("get", "IO error: Sync Extension Settings is corrupt"),
+    });
+    await OW.wait(60);
+    const s = OW.status(w);
+    assert(ctx, /^Could not read your settings —/.test(s.text) && s.state === "error",
+      "the page says it could not read them, in the error state, got " + JSON.stringify(s));
+    assert(ctx, w.writes.length === 0, "and loading wrote nothing, got " + JSON.stringify(w.writes));
+    assert(ctx, w.runtime.thrown.length === 0,
+      "and the page did not throw on the empty answer, threw: " + JSON.stringify(w.runtime.thrown));
+    ctx.info = JSON.stringify(s.text);
+  }),
+
+  check("options - a second Save while the first is in flight is not a second write",
+    async (ctx) => {
+    const w = OW.build({ sync: { groups: ["keep"] } });
+    await OW.wait(30);
+    w.sync.delay = 200;                     // Chrome takes its time
+    OW.click(w, "#save");
+    OW.ctrlS(w);
+    OW.click(w, "#save");
+    OW.ctrlS(w);
+    await OW.wait(350);
+    const during = OW.syncSets(w).length;
+    assert(ctx, during === 1, "four presses inside one write are one sync.set, got " + during);
+    assert(ctx, OW.status(w).text === "Saved", "and it reports that one, got " +
+      JSON.stringify(OW.status(w)));
+    /* THE GUARD LETS GO: a press after the write landed is a new save. */
+    OW.ctrlS(w);
+    await OW.wait(350);
+    assert(ctx, OW.syncSets(w).length === 2,
+      "a press after the first write landed writes again, got " + OW.syncSets(w).length);
+    ctx.info = "4 presses in flight → " + during + " write; next press → " + OW.syncSets(w).length;
   }),
 ];
 
