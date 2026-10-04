@@ -903,6 +903,17 @@ request: it named a rung that had not run, and every repo fell through as
 missing, which turned one dead credential into a page that read every
 repository you own, one at a time.
 
+**A rate limit is not a rejection, and gets no retry.** GitHub answers bad
+credentials with 401 and a spent quota with 403 or 429 plus
+`x-ratelimit-remaining: 0` or `retry-after`. The worker reads those headers, so
+a rate limit says `GitHub rate limit — retry after HH:MM` and *nothing else*:
+the token is fine, and the public endpoint is not re-asked, because its quota
+(60 an hour per IP) is smaller than the token's and is the one most likely
+spent. The worker will not ask again until the reset, and rung 4 — same-origin
+repo pages, a different quota — still shelves what the API did not answer. A
+403 *without* those headers is still `token rejected (403)`: a fine-grained
+token that was never given access, which does get the public retry.
+
 </details>
 
 ---
@@ -1171,7 +1182,10 @@ release too long — by the end its row 17 said `identity` while scenario 17 was
 - `pagination` — page-2 repos are shelved, pager hidden
 - `idempotence` — a second pass makes no second host, no nesting
 - `"warm cache"` — zero repo-page fetches, and the toolbar says *cached*
-- `rejected` — a 401 is said out loud, and the page still renders
+- `rejected` — a 401 is said out loud, and the page still renders; a 403
+  without rate-limit headers is still a rejection and still re-asks the public API
+- `rate` — a rate limit (403 + `x-ratelimit-remaining: 0`, or 429) says when it
+  resets, is never called a rejection, and costs no second API request
 - `facts` — one page read yields ten fields, topics still sidebar-scoped
 - `find` — description, README, topic and language are all searchable
 - `note` — written, painted, searchable — and survives a rescan
@@ -1370,6 +1384,7 @@ lines in the code are load-bearing, and the charter is where the reasons live.
 | the source line names several rungs, `via page + api (public) + repo pages` | that is normal. It lists every rung that contributed, in the order it was climbed; one name would hide the requests that answered most of the collection |
 | `read N more` in the toolbar | rung 4 stopped at 100 repos. Press it to read the rest — one request each, once, and they are cached afterwards. Nothing went wrong |
 | `token rejected (401)` | the token expired or was revoked; clear the field or make a new one. The run has already re-asked the public API without it, so the page is still shelved |
+| `GitHub rate limit — retry after HH:MM` | the API quota is spent — 60 requests an hour per IP without a token. The token is fine; there is nothing to replace. The worker will not ask the API again until that time, and repo pages still shelve what it did not answer. `retry later` means GitHub gave no reset time |
 | everything in Ungrouped | the repos have no topics yet, or your shelf names do not match any topic. Take the suggestions above the shelves, walk the untagged ones with `N untagged · tag them`, or move a row by hand with its `⠿` grip |
 | a repo sits on a shelf none of its topics name | you moved it there yourself, or accepted a name-or-language suggestion that pinned it. An override outranks every topic — drag it back to the leftovers shelf and the override is deleted |
 | a suggestion offers a shelf you already have | it should not: a topic that is already a shelf, and any repo that already has one, are both excluded. If it happens the shelf label and the topic differ in more than case |

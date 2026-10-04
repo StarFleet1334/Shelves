@@ -506,6 +506,46 @@ function slowStorage(worlds, keys, ms) {
   return rmw;
 }
 
+/* ── A SPENT QUOTA, AS GITHUB ACTUALLY SAYS IT ─────────────────────────────
+   403 (or 429) is how GitHub says RATE LIMIT; 401 is how it says bad
+   credentials. The difference lives entirely in the headers, so the fixture
+   door is an object, not a number. `RESET_AT` is ten minutes out in unix
+   SECONDS, as `x-ratelimit-reset` carries it, and `hhmm` is the local clock
+   the toolbar must therefore print. */
+const RESET_AT = Math.floor(Date.now() / 1000) + 600;
+const SPENT = { status: 403, headers: { "x-ratelimit-remaining": "0",
+                                        "x-ratelimit-reset": String(RESET_AT) } };
+const hhmm = (ms) => {
+  const d = new Date(ms);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+};
+const RATE_REPOS = [
+  { name: "secret-ai", topics: ["aiproject"], private: true },
+  { name: "random", topics: [], private: true },
+];
+/* What every rate-limit scenario owes the reader: the page renders, every
+   repo is still on it (rung 4 is a different quota), and the warning names
+   the limit — never the rejection or the shrug unless the case says so. */
+function rateVerdict(ctx, w, want) {
+  const v = readShelves(w.win);
+  assert(ctx, v, "a rate limit must never cost the render");
+  if (!v) return null;
+  const warn = v.warn || "";
+  assert(ctx, want.re.test(warn), "warn must match " + want.re + ", got " + JSON.stringify(warn));
+  (want.not || []).forEach((re) =>
+    assert(ctx, !re.test(warn), "warn must NOT match " + re + ", got " + JSON.stringify(warn)));
+  const total = v.shelves.reduce((n, s) => n + s.count, 0);
+  assert(ctx, total === RATE_REPOS.length, "every repo must still be on the page, got " + total);
+  const b = byLabel(v);
+  assert(ctx, b.aiproject && b.aiproject.count === 1,
+    "repo pages (a different quota) must still shelve the private repo");
+  if (want.calls != null) {
+    assert(ctx, w.counters.calls.length === want.calls,
+      "expected " + want.calls + " api call(s), got " + JSON.stringify(w.counters.calls));
+  }
+  return v;
+}
+
 /* ---------------------------------------------------------------------- */
 
 const SCENARIOS = [
@@ -1910,6 +1950,81 @@ const SCENARIOS = [
        adding v.warn printed the rejection twice. Harmless until the fallback
        made the sentence two clauses long and the line read as four. */
     ctx.info = v.note;
+  }),
+
+  /* ── A RATE LIMIT IS NOT A REJECTION ─────────────────────────────────────
+     Every 401 AND 403 used to read "token rejected", and then re-asked the
+     public door on the same spent quota — the toolbar said "token rejected
+     (403) · api unavailable" about a token with nothing wrong with it, for a
+     second request that could not succeed. These pin the distinction from
+     both sides: a limit names its reset and asks once; a 403 with no limit
+     headers is still a refusal and still gets its public retry. */
+  check("rate limit on the token door — says when, asks once", async (ctx) => {
+    const w = build({ owner: "octo", token: "github_pat_FINE",
+                      settings: { groups: ["aiproject"] },
+                      apiRepos: SPENT, repos: RATE_REPOS });
+    await settle(1200);
+    const want = new RegExp("rate limit — retry after " + hhmm(RESET_AT * 1000));
+    const v = rateVerdict(ctx, w, { re: /rate limit — retry after \d\d:\d\d/,
+                                    not: [/rejected/, /api unavailable/], calls: 1 });
+    if (!v) return;
+    assert(ctx, want.test(v.warn || ""), "the reset must be the local clock, got " + v.warn);
+    assert(ctx, !w.counters.calls.some((c) => c.auth === false),
+      "a rate limit must not re-ask the public door, calls " + JSON.stringify(w.counters.calls));
+    ctx.info = v.note;
+  }),
+  check("rate limit 429 with retry-after — same sentence, one request", async (ctx) => {
+    const w = build({ owner: "octo", token: "github_pat_FINE",
+                      settings: { groups: ["aiproject"] },
+                      apiRepos: { status: 429, headers: { "retry-after": "60" } },
+                      repos: RATE_REPOS });
+    await settle(1200);
+    const v = rateVerdict(ctx, w, { re: /rate limit — retry after \d\d:\d\d/,
+                                    not: [/rejected/, /api unavailable/], calls: 1 });
+    if (!v) return;
+    assert(ctx, !w.counters.calls.some((c) => c.auth === false),
+      "a 429 must not re-ask the public door, calls " + JSON.stringify(w.counters.calls));
+    ctx.info = v.note;
+  }),
+  check("rejected (401) token, rate-limited public door — says both", async (ctx) => {
+    const w = build({ owner: "octo", token: "github_pat_EXPIRED",
+                      settings: { groups: ["aiproject"] },
+                      apiRepos: 401, apiPublic: SPENT, repos: RATE_REPOS });
+    await settle(1200);
+    const v = rateVerdict(ctx, w, { re: /token rejected \(401\)/,
+                                    not: [/api unavailable/], calls: 2 });
+    if (!v) return;
+    assert(ctx, /rate limit/.test(v.warn || ""),
+      "the spent public door must be named as a limit, got " + v.warn);
+    ctx.info = v.note;
+  }),
+  check("rejected (403) with no rate headers — still a rejection, still retried", async (ctx) => {
+    const w = build({ owner: "octo", token: "github_pat_NOACCESS",
+                      settings: { groups: ["aiproject"] },
+                      apiRepos: 403, apiPublic: [], repos: RATE_REPOS });
+    await settle(1200);
+    const v = rateVerdict(ctx, w, { re: /token rejected \(403\)/,
+                                    not: [/rate limit/], calls: 2 });
+    if (!v) return;
+    assert(ctx, w.counters.calls.some((c) => c.auth === false),
+      "a refused token must still re-ask the public door, calls " + JSON.stringify(w.counters.calls));
+    ctx.info = v.note;
+  }),
+  check("rate limit with no token — the public door names its reset", async (ctx) => {
+    const w = build({ owner: "octo", settings: { groups: ["aiproject"] },
+                      apiRepos: SPENT, repos: RATE_REPOS });
+    await settle(1200);
+    const v = rateVerdict(ctx, w, { re: /rate limit — retry after \d\d:\d\d/,
+                                    not: [/api unavailable/, /rejected/], calls: 1 });
+    if (v) ctx.info = v.note;
+  }),
+  check("rate limit with no headers on the public door — retry later", async (ctx) => {
+    const w = build({ owner: "octo", settings: { groups: ["aiproject"] },
+                      apiRepos: 403, apiPublic: 403, repos: RATE_REPOS });
+    await settle(1200);
+    const v = rateVerdict(ctx, w, { re: /rate limit — retry later/,
+                                    not: [/api unavailable/, /rejected/], calls: 1 });
+    if (v) ctx.info = v.note;
   }),
   check("facts — one parse keeps everything the repo page said", async (ctx) => {
     const w = build({

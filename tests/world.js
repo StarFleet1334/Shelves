@@ -368,7 +368,15 @@ function makeLocks() {
  *   shelfMap    seed for the map the profile page leaves behind
  *   repos       [{name, chips?, private?, topics?}] — page 1
  *   page2       [{...}] optional second page
- *   apiRepos    what the API answers with, or a number for an HTTP error
+ *   apiRepos    what the API answers with, or a number for an HTTP error,
+ *               or { status, headers } for an HTTP error that carries
+ *               response headers — the shape of a RATE LIMIT, e.g.
+ *               { status: 403, headers: { "x-ratelimit-remaining": "0",
+ *                 "x-ratelimit-reset": "1790000000" } } or
+ *               { status: 429, headers: { "retry-after": "60" } }.
+ *               Header names are matched case-insensitively, as fetch's
+ *               Headers does; every fake response has `headers.get`,
+ *               answering null for anything it was not given
  *   overrides   seed for local `overrides` — { "owner/name": "shelf" }
  *   pins        seed for local `pins` — { "owner/name": true }
  *
@@ -457,7 +465,18 @@ function build(opts) {
     Object.defineProperty(win.navigator, "locks", { value: opts.locks, configurable: true });
   }
 
-  // What the API returns. A number means "fail with this status".
+  /* What the API returns. A number means "fail with this status"; an object
+   * { status, headers } means the same with response headers, which is the
+   * only way to build a rate limit — GitHub's 403 means "quota spent" or "no
+   * access" depending entirely on X-RateLimit-Remaining / Retry-After. */
+  const headersOf = (h) => {
+    const low = {};
+    for (const k of Object.keys(h || {})) low[k.toLowerCase()] = String(h[k]);
+    return { get: (name) => {
+      const v = low[String(name).toLowerCase()];
+      return v === undefined ? null : v;
+    } };
+  };
   const apiFetch = async (url) => {
     const authed = url.includes("/user/repos");
     /* TWO ENDPOINTS, TWO ANSWERS. `/user/repos` and `/users/{u}/repos` are
@@ -469,7 +488,11 @@ function build(opts) {
     const spec = (!authed && opts.apiPublic !== undefined)
       ? opts.apiPublic : opts.apiRepos;
     if (typeof spec === "number") {
-      return { ok: false, status: spec, json: async () => ({}) };
+      return { ok: false, status: spec, headers: headersOf(null), json: async () => ({}) };
+    }
+    if (spec && !Array.isArray(spec) && typeof spec === "object") {
+      return { ok: false, status: Number(spec.status), headers: headersOf(spec.headers),
+               json: async () => ({ message: "API rate limit exceeded" }) };
     }
     // Deliberately explicit: read the page number from the LAST page= only.
     const m = url.match(/[?&]page=(\d+)$/);
@@ -478,6 +501,7 @@ function build(opts) {
     return {
       ok: true,
       status: 200,
+      headers: headersOf(null),
       json: async () =>
         rows.map((r) => ({
           full_name: `${owner}/${r.name}`,
@@ -680,4 +704,4 @@ function writeNote(win, repoName, text) {
 const settle = (ms) => new Promise((r) => setTimeout(r, ms || 700));
 
 module.exports = { build, makeLocks, readShelves, settle, type, writeNote, openVocab,
-                   pickTerm, pickGap, readMark, profilePage, repoPage };
+                   pickTerm, pickGap, readMark, profilePage, repoPage, bootWorker };

@@ -38,6 +38,22 @@ globalThis.Shelves = globalThis.Shelves || {};
     });
   }
 
+  /* ── A RATE LIMIT IS A TIME, NOT A FAULT ──────────────────────────────────
+   * When the worker says `rateLimited`, nothing is broken: the token is fine,
+   * the network is fine, GitHub has simply counted to its ceiling for this
+   * hour. The one thing the reader can usefully be told is WHEN it comes back
+   * (P.IV) — so the sentence carries the reset as a local 24-hour clock, and
+   * says "later" rather than inventing a time when GitHub did not give one.
+   * HH:MM without a date is deliberate: a reset is at most an hour away (a
+   * Retry-After somewhat more), never far enough to need a day named. */
+  function rateSentence(resetAt) {
+    const at = typeof resetAt === "number" && isFinite(resetAt) && resetAt > 0
+      ? new Date(resetAt) : null;
+    if (!at || isNaN(at.getTime())) return "GitHub rate limit — retry later";
+    const two = (n) => String(n).padStart(2, "0");
+    return "GitHub rate limit — retry after " + two(at.getHours()) + ":" + two(at.getMinutes());
+  }
+
   /** Bounded concurrency over a shared iterator: N workers pulling one list. */
   async function pool(items, width, fn) {
     const it = items[Symbol.iterator]();
@@ -389,8 +405,32 @@ globalThis.Shelves = globalThis.Shelves || {};
       rungs.push("api (token)");
       /* A pasted token that has expired must be SAID, not silently ignored:
        * the user cannot otherwise tell an expired credential from an untagged
-       * repository (P.IV). */
-      if (!reply.ok && (reply.status === 401 || reply.status === 403)) {
+       * repository (P.IV).
+       *
+       * ── BUT A 403 IS NOT ALWAYS THE TOKEN ─────────────────────────────────
+       * This branch used to read every 401 AND every 403 as "token rejected".
+       * GitHub says bad credentials with 401. It says RATE LIMIT with 403 (or
+       * 429) plus `x-ratelimit-remaining: 0` / `retry-after` — so an hour of
+       * heavy browsing was blamed on a perfectly good token, and the reader
+       * was told to replace a credential that had nothing wrong with it.
+       *
+       * The worker reads those headers and says `rateLimited` (with the reset
+       * as `resetAt`); a 403 WITHOUT them is still a refusal — a fine-grained
+       * token that was never given this account's repos — and still says
+       * "token rejected (403)".
+       *
+       * ── AND A RATE LIMIT GETS NO SECOND REQUEST ───────────────────────────
+       * The public retry below is right for a rejected token: a different
+       * door, a different credential, a real chance. On a rate limit it buys
+       * nothing. The unauthenticated quota is SMALLER (60/hr per IP against
+       * 5,000), it is already the one most likely spent, and the toolbar used
+       * to read "token rejected (403) · api unavailable" — two clauses, both
+       * wrong, for a request that could not succeed. So it is skipped, the
+       * rung keeps its true name `api (token)`, and rung 4 — same-origin repo
+       * pages, a different quota altogether — reads what is missing. */
+      if (!reply.ok && reply.rateLimited) {
+        warning = rateSentence(reply.resetAt);
+      } else if (!reply.ok && (reply.status === 401 || reply.status === 403)) {
         warning = "token rejected (" + reply.status + ")";
         /* ── THE FALLBACK IS A REQUEST, NOT A LABEL ──────────────────────────
          * This branch used to set the source line to `api (public)` and stop.
@@ -405,13 +445,19 @@ globalThis.Shelves = globalThis.Shelves || {};
          * private ones — should reach rung 4. */
         reply = await askWorker({ type: "repos", user: S.owner(), token: "" });
         rungs[rungs.length - 1] = "api (public)";
-        if (!reply.ok) warning += " · api unavailable";
+        /* The public door can be spent even when the token was simply wrong,
+         * and then it is the reset time the reader needs, not "unavailable". */
+        if (!reply.ok) {
+          warning += " · " + (reply.rateLimited ? rateSentence(reply.resetAt) : "api unavailable");
+        }
       } else if (!reply.ok) {
         warning = "api unavailable";
       }
     } else {
       rungs.push("api (public)");
-      if (!reply.ok) warning = "api unavailable";
+      if (!reply.ok) {
+        warning = reply.rateLimited ? rateSentence(reply.resetAt) : "api unavailable";
+      }
     }
 
     const byName = new Map();
