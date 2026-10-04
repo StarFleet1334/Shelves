@@ -702,7 +702,17 @@ globalThis.Shelves = globalThis.Shelves || {};
    * names is its own mode, the box goes empty and says what is being shown,
    * and the reader's next keystroke drops straight back into text search.
    */
+  /* How many times each host's filter has been SET, by anyone. A WeakMap and
+   * not a dataset field, because it is bookkeeping between two functions in
+   * this file and nothing GitHub's page or the stylesheet should be able to
+   * read; a torn-down host takes its count with it. */
+  const filterGen = new WeakMap();
   S.applyFilter = function applyFilter(host, raw, only) {
+    /* Every call is a NEWER filter than any keystroke still waiting for its
+     * frame — see THE FIND BOX KEEPS TIME WITH THE SCREEN in `render`. Bumped
+     * here, inside the one function every path goes through, so no caller can
+     * set the filter and forget to tell the scheduler it did. */
+    filterGen.set(host, (filterGen.get(host) || 0) + 1);
     const q = String(raw || "").trim().toLowerCase();
     const set = only && only.names
       ? new Set([...only.names].map((n) => String(n).toLowerCase()))
@@ -710,35 +720,59 @@ globalThis.Shelves = globalThis.Shelves || {};
     const active = set ? set.size > 0 : !!q;
     let shown = 0, total = 0;
 
+    /* ── ONE WALK, NOT ONE PER SHELF ────────────────────────────────────────
+     * This used to filter the rows in one subtree query and then run a second
+     * `querySelectorAll` inside every shelf to count what it had just decided
+     * — on every keystroke. The row already knows its own verdict at the
+     * moment it is made, so the shelf tally is taken there, keyed by the
+     * shelf the row sits in.
+     *
+     * `li[data-sh-name]`, for the reason `moveRow` already spells out: a
+     * repo row contains a list of its own — GitHub's star menu ships one —
+     * so an unscoped count said `6 / 10` on a five-row shelf with one match.
+     * Both halves of the shelf block were wrong because of it. The
+     * denominator was merely silly; `hits` counted those same nested <li> as
+     * matches, because nothing ever gives them `sh-hide`, so `hits === 0` was
+     * unreachable and a shelf with nothing in it was never dimmed. The tally
+     * below therefore counts a row by EXACTLY that test — the `data-sh-name`
+     * stamp, not the haystack `total` keys on — and reads `sh-hide` after the
+     * toggle, which is what the per-shelf query used to see. */
+    const tally = new Map();   // details.sh-shelf -> {count, hits}
+
     /* THE ROWS ARE FILTERED FIRST AND THE SHELVES SECOND, because in flat mode
      * there are no shelves at all — `flat list` removes every <details> and
      * pours the rows into one <ul>. Walking shelves to reach rows made the box
      * silently inert there and, worse, made it report "0 of 0" while the
-     * reader typed into a list it was no longer touching. */
+     * reader typed into a list it was no longer touching. In flat mode
+     * `closest` simply answers null and the tally stays empty. */
     host.querySelectorAll("li").forEach((li) => {
-      if (li.dataset.shHay === undefined) return;   // not one of ours
-      total++;
-      const hit = set
-        ? set.has(li.dataset.shName || "")
-        : (!q || li.dataset.shHay.indexOf(q) !== -1);
-      li.classList.toggle("sh-hide", !hit);
-      if (hit) shown++;
+      if (li.dataset.shHay !== undefined) {   // one of ours
+        total++;
+        const hit = set
+          ? set.has(li.dataset.shName || "")
+          : (!q || li.dataset.shHay.indexOf(q) !== -1);
+        li.classList.toggle("sh-hide", !hit);
+        if (hit) shown++;
+      }
+      if (li.dataset.shName === undefined) return;
+      const d = li.closest("details.sh-shelf");
+      if (!d) return;
+      let t = tally.get(d);
+      if (!t) tally.set(d, (t = { count: 0, hits: 0 }));
+      t.count++;
+      if (!li.classList.contains("sh-hide")) t.hits++;
     });
 
     host.querySelectorAll("details.sh-shelf").forEach((d) => {
-      /* `li[data-sh-name]`, for the reason `moveRow` already spells out: a
-       * repo row contains a list of its own — GitHub's star menu ships one —
-       * so an unscoped count said `6 / 10` on a five-row shelf with one match.
-       * Both halves of this block were wrong because of it. The denominator
-       * was merely silly; `hits` counted those same nested <li> as matches,
-       * because nothing ever gives them `sh-hide`, so `hits === 0` was
-       * unreachable and a shelf with nothing in it was never dimmed. */
-      const held = [...d.querySelectorAll("li[data-sh-name]")];
-      const count = held.length;
-      const hits = held.filter((li) => !li.classList.contains("sh-hide")).length;
+      const t = tally.get(d);
+      const count = t ? t.count : 0;
+      const hits = t ? t.hits : 0;
 
       const c = d.querySelector(".sh-count");
-      if (c) c.textContent = active ? hits + " / " + count : String(count);
+      if (c) {
+        const text = active ? hits + " / " + count : String(count);
+        if (c.textContent !== text) c.textContent = text;
+      }
       /* A shelf with no match is dimmed rather than removed: the shelves are
        * the map, and a map that reshuffles under a search is harder to read
        * than one that greys out. */
@@ -752,12 +786,20 @@ globalThis.Shelves = globalThis.Shelves || {};
        *
        * `active`, not `q`: a name-set filter opens shelves exactly as a typed
        * one does, and reading the typed query here would have parked the state
-       * on the way in and never restored it on the way out. */
+       * on the way in and never restored it on the way out.
+       *
+       * ── `open` IS WRITTEN ONLY WHEN IT CHANGES ────────────────────────────
+       * Assigning `d.open` is not free even when the value is the same one:
+       * it is a layout of the shelf's whole subtree, and a real flip queues a
+       * `toggle` event the collapse store listens to. Twelve of those per
+       * keystroke, eleven of them saying nothing, was most of what typing
+       * cost. Same result, written once. */
       if (active) {
         if (d.dataset.shWasOpen === undefined) d.dataset.shWasOpen = d.open ? "1" : "0";
-        d.open = hits > 0;
+        if (d.open !== hits > 0) d.open = hits > 0;
       } else if (d.dataset.shWasOpen !== undefined) {
-        d.open = d.dataset.shWasOpen === "1";
+        const back = d.dataset.shWasOpen === "1";
+        if (d.open !== back) d.open = back;
         delete d.dataset.shWasOpen;
       }
     });
@@ -1159,7 +1201,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         onPick: (topic) => {
           find.value = topic;
           onlySet = null;
-          S.applyFilter(host, topic);
+          filterNow(topic);
           find.focus();
         },
         /* An audit finding cannot be a query, so it addresses rows by name.
@@ -1169,7 +1211,7 @@ globalThis.Shelves = globalThis.Shelves || {};
         onRepos: (names_, label) => {
           find.value = "";
           onlySet = { names: names_, label };
-          S.applyFilter(host, "", onlySet);
+          filterNow("", onlySet);
         },
       });
       panel = document.createElement("div");
@@ -1251,11 +1293,22 @@ globalThis.Shelves = globalThis.Shelves || {};
      * statement about the source. `carries()` is the same test the audit uses
      * for the same reason. */
     const STALE_DAYS = 365;
+    /* ── A ROW'S INDEX IS LOOKED UP, NOT SEARCHED FOR ──────────────────────
+     * `facts` is index-parallel to `rows`, and a shelf holds <li>, so weighing
+     * a shelf means turning each <li> back into its index. That was
+     * `rows.indexOf(li)` per row — a linear scan inside a walk over every
+     * shelf, which sums to |rows|²: 108,900 comparisons at 330 rows, run twice
+     * per page (phase one and the rebucket), on the first frame. Built once
+     * here, because `rows` is pinned for the life of this render (see the
+     * head of the function) — a map over a row set that could change would be
+     * a map that lies, which is exactly why that pin is worth relying on. */
+    const rowAt = new Map();
+    rows.forEach((li, i) => rowAt.set(li, i));
     const weighOf = (list) => {
       let stars = 0, hasStars = false, stale = 0, fresh = 0, dated = 0;
       list.forEach((li) => {
-        const i = rows.indexOf(li);
-        const f = i >= 0 ? facts[i] : null;
+        const i = rowAt.get(li);
+        const f = i !== undefined ? facts[i] : null;
         if (!f) return;
         if (S.carries(f.via, "stars") && typeof f.stars === "number") {
           stars += f.stars;
@@ -1558,14 +1611,72 @@ globalThis.Shelves = globalThis.Shelves || {};
      * silently turn it back into "no filter" on the next repaint. Both halves
      * are kept, and they are mutually exclusive by construction. */
     let onlySet = null;
+
+    /* ── THE FIND BOX KEEPS TIME WITH THE SCREEN ───────────────────────────
+     * A filter pass is a walk of every row, a class per row, a count per
+     * shelf — and it ran once per `input` event. A held key, a paste that
+     * IMEs into several events, or a fast typist on 330 rows asked for more
+     * passes than the screen could ever show; every one but the last in a
+     * frame was painted to nobody.
+     *
+     * LEADING EDGE AND TRAILING, ONE FRAME WIDE. The first keystroke is
+     * applied AT ONCE, synchronously, exactly as before — a single key must
+     * not feel a frame late, and everything that reads the page straight
+     * after typing (the suite does, nineteen times) still sees the answer.
+     * That opens a window one animation frame long. Keystrokes inside it only
+     * mark the box dirty; when the frame comes, a dirty box is applied ONCE,
+     * with whatever the box holds THEN — never a queued intermediate. A burst
+     * of any length inside one frame costs at most two passes.
+     *
+     * ── AND A STALE KEYSTROKE NEVER WINS ──────────────────────────────────
+     * The filter is also set directly: Esc, a topic chip, the audit's by-name
+     * filter, the rebucket putting the reader's filter back, the restore
+     * after GitHub's own Type/Language swap. Any of those landing inside the
+     * window is NEWER than the keystroke waiting on the frame, and letting the
+     * frame fire would paint an old query over it — Esc pressed mid-burst
+     * would clear the box and then watch the text it just cleared come back
+     * as a filter. So it is guarded twice, deliberately: every direct path
+     * goes through `filterNow`, which cancels the frame outright; and the
+     * frame itself re-checks `filterGen`, which `S.applyFilter` bumps on
+     * every call from anywhere, so a path that forgets `filterNow` is still
+     * caught. The frame also stands down on a host GitHub has already torn
+     * out, so a keystroke cannot rewrite `S.lastFilter` from a dead page.
+     *
+     * `S.applyFilter` is read through the property at call time, never
+     * captured, so it stays the one replaceable seam it always was. */
+    const raf = typeof requestAnimationFrame === "function";
+    let pending = null;   // {id, gen, dirty} while a frame window is open
+    const dropPending = () => {
+      if (!pending) return;
+      if (raf) cancelAnimationFrame(pending.id);
+      else clearTimeout(pending.id);
+      pending = null;
+    };
+    const frameDone = () => {
+      const p = pending;
+      pending = null;
+      if (!p || !p.dirty || !host.isConnected) return;
+      if (filterGen.get(host) !== p.gen) return;   // something newer set it
+      S.applyFilter(host, find.value);
+    };
+    const filterNow = (raw, only) => {
+      dropPending();
+      return S.applyFilter(host, raw, only);
+    };
     find.addEventListener("input", () => {
       onlySet = null;
+      if (pending) {
+        pending.dirty = true;
+        return;
+      }
       S.applyFilter(host, find.value);
+      pending = { id: 0, gen: filterGen.get(host), dirty: false };
+      pending.id = raf ? requestAnimationFrame(frameDone) : setTimeout(frameDone, 16);
     });
     find.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         find.value = "";
-        S.applyFilter(host, "");
+        filterNow("");
         find.blur();
       }
     });
@@ -1832,7 +1943,7 @@ globalThis.Shelves = globalThis.Shelves || {};
        * classes through all of the above, so without this the page would show
        * a full set of counts, an empty search box, and some repositories
        * simply missing. */
-      if (was.on) S.applyFilter(host, was.q, was.only);
+      if (was.on) filterNow(was.q, was.only);
 
       publishMap();
       return host;
@@ -1846,7 +1957,7 @@ globalThis.Shelves = globalThis.Shelves || {};
     if (S.lastFilter && S.lastFilter.q) {
       find.value = S.lastFilter.q;
       onlySet = null;
-      S.applyFilter(host, S.lastFilter.q);
+      filterNow(S.lastFilter.q);
     }
 
     return host;

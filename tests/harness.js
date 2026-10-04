@@ -135,7 +135,7 @@ async function assertLive(ctx, w, want) {
     JSON.stringify(v.found) + ", want \"" + want.hits.length + " of " + want.all + "\"");
   assert(ctx, v.visible.slice().sort().join() === want.hits.slice().sort().join(),
     "and hide exactly the rows it does not match, visible: " + v.visible.join());
-  type(w.win, "");
+  await keystroke(w.win, "");
   v = readShelves(w.win);
   assert(ctx, v.visible.length === want.all && !doc.querySelector("li.sh-hide"),
     "and clearing it must bring every row back, visible " + v.visible.length +
@@ -547,6 +547,48 @@ function rateVerdict(ctx, w, want) {
 }
 
 /* ---------------------------------------------------------------------- */
+
+/* THE FIND BOX'S FIXTURE for the coalescing scenarios: five `keep` rows and
+   one `other`, chipped so nothing is fetched and the page settles fast. */
+const filterWorld = async () => {
+  const w = build({
+    owner: "octo",
+    settings: { groups: ["keep", "other"] },
+    repos: Array.from({ length: 5 }, (_, i) => ({ name: "k" + i, chips: ["keep"] }))
+      .concat([{ name: "o1", chips: ["other"] }]),
+  });
+  await settle(1200);
+  const host = w.win.document.getElementById("shelves-host");
+  return { w, host };
+};
+const shelvesOf = (host) => Object.fromEntries(
+  [...host.querySelectorAll("details.sh-shelf")].map((d) =>
+    [(d.querySelector(".sh-name") || {}).textContent, d]));
+const hidden = (host) => [...host.querySelectorAll("li[data-sh-name]")]
+  .filter((li) => li.classList.contains("sh-hide"))
+  .map((li) => String(li.dataset.shName).split("/").pop()).sort();
+const foundOf = (host) => (host.querySelector(".sh-found") || {}).textContent || "";
+const burst = (win, values) => {
+  const el = win.document.querySelector("#shelves-host .sh-find");
+  values.forEach((v) => {
+    el.value = v;
+    el.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  return el;
+};
+/* A frame is ~16ms under pretendToBeVisual; 50 is several of them. */
+const frame = () => settle(50);
+/* THE READER'S NEXT KEYSTROKE, not the same one. The find box coalesces input
+   to one pass per animation frame: the first keystroke with no frame pending
+   answers synchronously, and any further keystroke inside that frame only
+   marks the box dirty until the frame applies it. A scenario that types twice
+   on consecutive lines and reads in between is two keystrokes in well under a
+   millisecond, which no person produces; this lets the frame pass first, so
+   the keystroke is a leading edge again and still answers at once. */
+const keystroke = async (win, text) => {
+  await frame();
+  return type(win, text);
+};
 
 const SCENARIOS = [
   check("chips already on the page — zero network", async (ctx) => {
@@ -2105,7 +2147,7 @@ const SCENARIOS = [
     assert(ctx, /2 of 3/.test(v.found), "the bar counts the matches, got: " + v.found);
 
     // a topic nobody typed into the row
-    type(w.win, "aiproject");
+    await keystroke(w.win, "aiproject");
     v = readShelves(w.win);
     assert(ctx, v.visible.join() === "throttle-kit", "topics are searchable, got: " + v.visible.join());
     const empty = [...w.win.document.querySelectorAll(".sh-shelf.sh-nomatch")];
@@ -2118,7 +2160,7 @@ const SCENARIOS = [
        `star`, `starred` and `list` on a real profile. The row's text is the
        TEXT COLUMN's — see S.rowText. */
     for (const ghost of ["starred", "lists", "sorry", "unstar"]) {
-      type(w.win, ghost);
+      await keystroke(w.win, ghost);
       v = readShelves(w.win);
       assert(ctx, v.visible.length === 0,
         "\"" + ghost + "\" is GitHub's hidden chrome and must match no row, got: " +
@@ -2126,11 +2168,11 @@ const SCENARIOS = [
     }
 
     // a language, which GitHub's box also cannot match
-    type(w.win, "python");
+    await keystroke(w.win, "python");
     v = readShelves(w.win);
     assert(ctx, v.visible.join() === "throttle-kit", "language is searchable, got: " + v.visible.join());
 
-    type(w.win, "");
+    await keystroke(w.win, "");
     v = readShelves(w.win);
     assert(ctx, v.visible.length === 3, "clearing restores every row, got " + v.visible.length);
     assert(ctx, v.found === "", "and the counter goes quiet");
@@ -2144,7 +2186,7 @@ const SCENARIOS = [
     [...w.win.document.querySelectorAll("#shelves-host .sh-btn")]
       .find((b) => b.textContent === "flat list")
       .click();
-    type(w.win, "rate limiting");
+    await keystroke(w.win, "rate limiting");
     const flatRows = [...w.win.document.querySelectorAll("#shelves-host li")];
     const flatShown = flatRows.filter((li) => !li.classList.contains("sh-hide"));
     assert(ctx, flatRows.length === 3 && flatShown.length === 2,
@@ -3931,7 +3973,7 @@ const SCENARIOS = [
     v = readShelves(w.win);
     assert(ctx, v.visible.join() === "c",
       "typing leaves the name-set mode, got: " + v.visible.join());
-    type(w.win, "");
+    await keystroke(w.win, "");
     v = readShelves(w.win);
     assert(ctx, v.visible.length === 5, "and clearing restores every row");
 
@@ -5657,6 +5699,219 @@ const SCENARIOS = [
       "the matching row is still where it was");
 
     ctx.info = "1 / 5 with a nested <li> per row (was 6 / 10), and `other` dims";
+  }),
+  check("weigh - shelf weight is linear, not quadratic", async (ctx) => {
+    /* `weighOf` found each row's facts with `rows.indexOf(li)` — a linear
+       search per row, so painting the weights was O(n²) in the size of the
+       profile: 330 rows is ~54,000 comparisons for a sentence per shelf.
+
+       Measured as WORK, not time. Every Array#indexOf the page makes with a
+       row as its needle is charged the number of slots it walked, in the
+       page's own realm (the content scripts run as <script>s inside jsdom, so
+       their arrays are `win.Array`, not this file's). Doubling the rows must
+       not much more than double that bill; quadratic quadruples it. A fix
+       that never searches at all bills zero, which passes. And the weights
+       are checked to the star, because the cheap way to make a lookup fast is
+       to make it look up the wrong row. */
+    const day = 86400000;
+    const run = async (n) => {
+      const now = Date.now();
+      const api = [], repos = [];
+      const want = { keep: { stars: 0, stale: 0, n: 0 }, other: { stars: 0, stale: 0, n: 0 } };
+      for (let i = 0; i < n; i++) {
+        const shelf = i % 2 ? "keep" : "other";
+        const stale = i % 3 === 0;
+        api.push({ name: "r" + i, topics: [shelf], stars: i % 7,
+                   updated: new Date(now - (stale ? 400 : 10) * day).toISOString() });
+        repos.push({ name: "r" + i, topics: [shelf] });
+        want[shelf].stars += i % 7;
+        want[shelf].stale += stale ? 1 : 0;
+        want[shelf].n++;
+      }
+      const w = build({ viewer: "octo", owner: "octo",
+                        settings: { groups: ["keep", "other"] }, apiRepos: api, repos });
+      const early = !!w.win.document.getElementById("shelves-host");
+      const AP = w.win.Array.prototype;
+      const real = AP.indexOf;
+      let work = 0;
+      AP.indexOf = function (x) {
+        const r = real.apply(this, arguments);
+        if (x && x.nodeType === 1 && x.tagName === "LI") work += r >= 0 ? r + 1 : this.length;
+        return r;
+      };
+      try {
+        await settle(2000);
+      } finally {
+        AP.indexOf = real;
+      }
+      const got = {};
+      w.win.document.querySelectorAll("#shelves-host details.sh-shelf").forEach((d) => {
+        got[(d.querySelector(".sh-name") || {}).textContent] = {
+          weight: (d.querySelector(".sh-weight") || {}).textContent || "",
+          count: (d.querySelector(".sh-count") || {}).textContent || "",
+        };
+      });
+      return { early, work, want, got };
+    };
+
+    const a = await run(120);
+    const b = await run(240);
+    for (const r of [a, b]) {
+      const n = r.want.keep.n + r.want.other.n;
+      assert(ctx, !r.early,
+        "the counter must be in place before the first paint (" + n + " rows)");
+      for (const label of ["keep", "other"]) {
+        const want = r.want[label];
+        const got = r.got[label];
+        assert(ctx, got, label + " shelf missing at " + n + " rows");
+        if (!got) continue;
+        const sentence = "★ " + want.stars + " · " + want.stale + " stale";
+        assert(ctx, got.weight === sentence,
+          label + " at " + n + " rows weighs `" + sentence + "`, got `" + got.weight + "`");
+        assert(ctx, got.count === String(want.n),
+          label + " at " + n + " rows counts " + want.n + ", got " + got.count);
+      }
+    }
+    assert(ctx, b.work <= 2.5 * a.work,
+      "doubling the rows must not quadruple the lookup: " + a.work + " slots walked at 120, " +
+      b.work + " at 240 (" + (a.work ? (b.work / a.work).toFixed(2) : "-") + "x)");
+    ctx.info = "weights exact at 120 and 240 rows; row-lookup work " + a.work + " -> " + b.work;
+  }),
+
+  check("filter - a burst of keystrokes in one frame costs at most two passes",
+    async (ctx) => {
+    /* Every keystroke walked every row and every shelf, synchronously,
+       however fast they came. Coalesced per animation frame: the first
+       applies at once (so a single keystroke still answers immediately),
+       the rest only mark the box dirty, and the frame applies the value
+       the box holds THEN. The wrapper works because the box calls
+       `Shelves.applyFilter` through the property at call time. */
+    const { w, host } = await filterWorld();
+    assert(ctx, host, "never rendered");
+    if (!host) return;
+    const S = w.win.Shelves;
+    const real = S.applyFilter;
+    let calls = 0;
+    S.applyFilter = function () { calls++; return real.apply(this, arguments); };
+    let sync = 0;
+    try {
+      burst(w.win, ["k", "k0", "k1", "k2", "k4"]);
+      sync = calls;
+      await frame();
+    } finally {
+      S.applyFilter = real;
+    }
+    assert(ctx, sync >= 1, "the first keystroke must apply at once, got " + sync + " passes");
+    assert(ctx, calls <= 2,
+      "five keystrokes in one frame cost at most two passes, got " + calls +
+      " (" + sync + " before the frame)");
+    assert(ctx, foundOf(host) === "1 of 6",
+      "the frame applies the LAST value, `k4` -> `1 of 6`, got: " + foundOf(host));
+    const want = ["k0", "k1", "k2", "k3", "o1"];
+    assert(ctx, JSON.stringify(hidden(host)) === JSON.stringify(want),
+      "everything but k4 is hidden, got " + JSON.stringify(hidden(host)));
+    assert(ctx, host.dataset.filtering === "1", "and the host says it is filtering");
+    ctx.info = calls + " passes for 5 keystrokes (" + sync + " sync), ends on `k4`: " +
+      foundOf(host);
+  }),
+
+  check("filter - Escape during a pending frame stays cleared", async (ctx) => {
+    /* The trailing apply reads the box when the frame fires. Escape empties
+       the box and applies "" directly — and if the pending frame were left
+       armed it would apply whatever it had been told was dirty, and a
+       filter the reader dismissed would come back 16ms later. */
+    const { w, host } = await filterWorld();
+    assert(ctx, host, "never rendered");
+    if (!host) return;
+    const before = Object.entries(shelvesOf(host)).map(([k, d]) => k + "=" + d.open).join(",");
+    const el = burst(w.win, ["k1", "k2", "k3"]);
+    el.dispatchEvent(new w.win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await frame();
+    assert(ctx, el.value === "", "Escape empties the box, got `" + el.value + "`");
+    assert(ctx, hidden(host).length === 0,
+      "no row stays hidden after the frame, got " + JSON.stringify(hidden(host)));
+    assert(ctx, foundOf(host) === "", "the tally is gone, got: " + foundOf(host));
+    assert(ctx, host.dataset.filtering === "",
+      "the host is not filtering, got `" + host.dataset.filtering + "`");
+    const after = Object.entries(shelvesOf(host)).map(([k, d]) => k + "=" + d.open).join(",");
+    assert(ctx, after === before, "shelves are back as they were: " + before + " vs " + after);
+    ctx.info = "burst then Escape: 0 hidden, empty tally, after a frame";
+  }),
+
+  check("filter - a shelf's open state is only written when it changes", async (ctx) => {
+    /* applyFilter wrote `d.open` on every shelf on every pass. A browser
+       (and jsdom) fires `toggle` only when the state really changes, so a
+       redundant write is invisible to a toggle listener — but it is still
+       an attribute write per shelf per keystroke, and a MutationObserver
+       sees every one. Both are counted: toggles because that is what the
+       page's own listener hears, attribute records because that is where
+       the waste is. */
+    const { w, host } = await filterWorld();
+    assert(ctx, host, "never rendered");
+    if (!host) return;
+    const sh = shelvesOf(host);
+    assert(ctx, sh.keep && sh.other, "both shelves must render");
+    if (!sh.keep || !sh.other) return;
+    /* A pre-search state that a search must disturb: keep closed, other open. */
+    sh.keep.open = false;
+    sh.other.open = true;
+    await frame();
+    const pre = { keep: sh.keep.open, other: sh.other.open };
+
+    let toggles = 0, writes = 0;
+    const onToggle = () => toggles++;
+    host.addEventListener("toggle", onToggle, true);
+    const mo = new w.win.MutationObserver((rs) => { writes += rs.length; });
+    mo.observe(host, { attributes: true, attributeFilter: ["open"], subtree: true });
+    const flush = () => { writes += mo.takeRecords().length; };
+
+    type(w.win, "k");
+    await frame(); flush();
+    const t1 = toggles, w1 = writes;
+    assert(ctx, sh.keep.open === true && sh.other.open === false,
+      "`k` opens keep and closes other, got keep=" + sh.keep.open + " other=" + sh.other.open);
+    assert(ctx, t1 === 2, "the first keystroke changes two shelves, got " + t1 + " toggles");
+
+    type(w.win, "k1");
+    await frame(); flush();
+    const t2 = toggles - t1, w2 = writes - w1;
+    assert(ctx, t2 === 0, "`k1` keeps the same shelves open: 0 toggles, got " + t2);
+    assert(ctx, w2 === 0,
+      "and writes no `open` attribute at all, got " + w2 + " write(s)");
+
+    type(w.win, "");
+    await frame(); flush();
+    mo.disconnect();
+    host.removeEventListener("toggle", onToggle, true);
+    assert(ctx, sh.keep.open === pre.keep && sh.other.open === pre.other,
+      "clearing restores the pre-search state keep=" + pre.keep + " other=" + pre.other +
+      ", got keep=" + sh.keep.open + " other=" + sh.other.open);
+    assert(ctx, foundOf(host) === "" && host.dataset.filtering === "",
+      "and the filter is gone");
+    ctx.info = "toggles " + t1 + " / " + t2 + ", open writes " + w1 + " / " + w2 +
+      " (first / second keystroke); restored on clear";
+  }),
+
+  check("filter - a single keystroke still answers synchronously", async (ctx) => {
+    /* The leading edge: with no frame pending, a keystroke applies before
+       `dispatchEvent` returns. tests/world.js's `type()` and every scenario
+       built on it read the page on the very next line. */
+    const { w, host } = await filterWorld();
+    assert(ctx, host, "never rendered");
+    if (!host) return;
+    type(w.win, "k3");
+    const first = foundOf(host);
+    assert(ctx, first === "1 of 6", "`k3` reads `1 of 6` at once, got: " + first);
+    assert(ctx, hidden(host).length === 5, "and hides five rows at once, got " + hidden(host).length);
+    /* And the leading edge re-arms once the frame has passed. */
+    await frame();
+    type(w.win, "o1");
+    const second = foundOf(host);
+    assert(ctx, second === "1 of 6" &&
+      JSON.stringify(hidden(host)) === JSON.stringify(["k0", "k1", "k2", "k3", "k4"]),
+      "a keystroke after the frame is immediate too, got " + second + " " +
+      JSON.stringify(hidden(host)));
+    ctx.info = "`k3` -> " + first + " and `o1` -> " + second + ", both before the next line";
   }),
   check("shelf map - whose profile it was is written down, not left to be guessed",
     async (ctx) => {
